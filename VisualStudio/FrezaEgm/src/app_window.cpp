@@ -1,6 +1,11 @@
 #include "app_window.h"
 
 #include "csv_io.h"
+#include "cam.h"
+#include <shellapi.h>
+#include <cmath>
+#include <cwctype>
+#include <limits>
 #include "egm_client.h"
 #include "text_io.h"
 #include "trajectory.h"
@@ -48,6 +53,7 @@ enum ControlId : int {
     kIdHome = 1034,
     kIdStatus = 1040,
     kIdLog = 1041,
+    kIdStl = 1050, kIdDemo = 1051, kIdUnits = 1052,
 };
 
 struct WindowState {
@@ -73,6 +79,9 @@ struct WindowState {
     HWND hWork = nullptr;
     HWND hLog = nullptr;
 
+    HWND hUnits = nullptr, hScale = nullptr, hDiameter = nullptr, hCamStep = nullptr;
+    HWND hTx = nullptr, hTy = nullptr, hTz = nullptr;
+    std::unique_ptr<cam::Result> camResult;
     std::vector<Point3> points;
     std::wstring trajectoryPath;
     EgmClient egm;
@@ -181,25 +190,33 @@ void CreateControls(WindowState& state)
                                 WS_BORDER | ES_MULTILINE | ES_READONLY | WS_VSCROLL | ES_AUTOVSCROLL,
                                 538, 34, 436, 264, kIdStatus, state.font);
 
-    MakeControl(parent, L"BUTTON", L"Порядок работы", BS_GROUPBOX, 524, 318, 464, 342, -1, state.fontBold);
-    state.hWork = MakeControl(parent, L"EDIT", L"",
-                              WS_BORDER | ES_MULTILINE | ES_READONLY | WS_VSCROLL | ES_AUTOVSCROLL,
-                              538, 342, 436, 306, -1, state.font);
-    ::SetWindowTextW(state.hWork,
-                L"1. Загрузите файл траектории (кнопка «Открыть файл…»).\r\n"
-                L"2. При необходимости сохраните точки в CSV.\r\n"
-                L"3. В RobotStudio создайте систему с опцией 689-1 EGM и запустите контроллер.\r\n"
-                L"4. Загрузите RAPID-модуль ModuleEGM.mod (Add Module → File…).\r\n"
-                L"5. Нажмите «Запустить траекторию» — приложение займёт UDP-порт 6510\r\n"
-                L"   и будет ждать первый пакет от контроллера.\r\n"
-                L"6. В RobotStudio нажмите Start (вкладка RAPID).\r\n"
-                L"7. Робот должен поехать в первую точку и далее по траектории.\r\n\r\n"
-                L"Важно: модуль EGM настроен на базовую систему координат, поэтому\r\n"
-                L"приложение отправляет АБСОЛЮТНЫЕ координаты TCP (мм).\r\n"
-                L"Первая точка файла должна совпадать с home робота (MoveJ home).\r\n\r\n"
-                L"Ручные команды dX/dY/dZ — то же смещение в мм от стартовой позы.\r\n\r\n"
-                L"Если пакеты идут, а робот стоит: посмотрите MCI, моторы и сходимость\r\n"
-                L"в панели «Состояние EGM», а также совпадает ли home с первой точкой.");
+    MakeControl(parent, L"BUTTON", L"STL / OpenCAMLib — до запуска EGM", BS_GROUPBOX,
+                524, 318, 464, 342, -1, state.fontBold);
+    MakeControl(parent, L"STATIC", L"Единицы STL:", SS_LEFT, 536, 342, 94, 20, -1, state.font);
+    state.hUnits = MakeControl(parent, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL,
+                               632, 338, 90, 100, kIdUnits, state.font);
+    ::SendMessageW(state.hUnits, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"мм"));
+    ::SendMessageW(state.hUnits, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"дюймы"));
+    MakeControl(parent, L"STATIC", L"масштаб:", SS_LEFT, 738, 342, 65, 20, -1, state.font);
+    state.hScale = MakeControl(parent, L"EDIT", L"1", WS_BORDER, 810, 338, 70, 24, -1, state.font);
+    MakeControl(parent, L"STATIC", L"Фреза Ø, мм:", SS_LEFT, 536, 374, 94, 20, -1, state.font);
+    state.hDiameter = MakeControl(parent, L"EDIT", L"4", WS_BORDER, 632, 370, 70, 24, -1, state.font);
+    MakeControl(parent, L"STATIC", L"шаг CAM, мм:", SS_LEFT, 720, 374, 95, 20, -1, state.font);
+    state.hCamStep = MakeControl(parent, L"EDIT", L"0.5", WS_BORDER, 820, 370, 60, 24, -1, state.font);
+    MakeControl(parent, L"STATIC", L"Перенос XYZ в базу, мм (без поворота):", SS_LEFT, 536, 403, 420, 20, -1, state.font);
+    state.hTx = MakeControl(parent, L"EDIT", L"", WS_BORDER, 536, 426, 85, 24, -1, state.font);
+    state.hTy = MakeControl(parent, L"EDIT", L"", WS_BORDER, 630, 426, 85, 24, -1, state.font);
+    state.hTz = MakeControl(parent, L"EDIT", L"", WS_BORDER, 724, 426, 85, 24, -1, state.font);
+    MakeControl(parent, L"BUTTON", L"Демо 20×20", BS_PUSHBUTTON, 820, 424, 150, 28, kIdDemo, state.font);
+    MakeControl(parent, L"BUTTON", L"STL → рассчитать…", BS_PUSHBUTTON, 536, 460, 180, 28, kIdStl, state.font);
+    MakeControl(parent, L"STATIC", L"Демо ≠ калибровка стенда", SS_LEFT, 724, 466, 250, 20, -1, state.font);
+    state.hWork = MakeControl(parent, L"EDIT", L"Выберите единицы и задайте перенос.\r\n"
+        L"Центр торца фрезы идёт по верхней границе.\r\n"
+        L"Только прямоугольный блок: 12 треугольников.\r\n"
+        L"Расчёт не запускает движение. Экспорт: Сохранить CSV.\r\n"
+        L"Длина CylCutter = 20 мм; к TCP не прибавляется.",
+        WS_BORDER | ES_MULTILINE | ES_READONLY | WS_VSCROLL, 536, 496, 438, 152, -1, state.font);
+
 }
 
 void AddLog(WindowState& state, const std::wstring& text)
@@ -348,6 +365,7 @@ void UpdateInfoLabels(WindowState& state)
 
 void LoadTrajectoryIntoState(WindowState& state, const std::wstring& path)
 {
+    if (state.egm.Running()) { AddLog(state, L"Сначала остановите EGM: источник траектории занят."); return; }
     const TrajectoryLoadResult result = LoadTrajectory(path);
     if (!result.ok)
     {
@@ -356,6 +374,7 @@ void LoadTrajectoryIntoState(WindowState& state, const std::wstring& path)
         return;
     }
 
+    state.camResult.reset();
     state.points = result.points;
     state.trajectoryPath = path;
     UpdateInfoLabels(state);
@@ -462,6 +481,7 @@ void OnSaveCsv(WindowState& state)
 
 void OnLoadCsv(WindowState& state)
 {
+    if (state.egm.Running()) { AddLog(state, L"Сначала остановите EGM: источник траектории занят."); return; }
     std::wstring path;
     if (!BrowseFile(state.hwnd, false, kFilterCsv, path))
     {
@@ -477,10 +497,72 @@ void OnLoadCsv(WindowState& state)
         return;
     }
 
+    state.camResult.reset();
     state.points = std::move(points);
     state.trajectoryPath = path;
     UpdateInfoLabels(state);
     AddLog(state, Format(L"CSV загружен: точек %d", static_cast<int>(state.points.size())));
+}
+
+// Strict numeric entry is confined to the new CAM fields.
+double CamNumber(HWND edit)
+{
+    wchar_t text[128] = {};
+    ::GetWindowTextW(edit, text, 128);
+    wchar_t* end = nullptr;
+    const double v = wcstod(text, &end);
+    const bool parsed = end != text;
+    while (end && iswspace(*end)) ++end;
+    return !parsed || !end || *end || !std::isfinite(v)
+        ? std::numeric_limits<double>::quiet_NaN() : v;
+}
+
+void OnStl(WindowState& state, std::wstring path = {})
+{
+    if (state.egm.Running()) { AddLog(state, L"Сначала остановите EGM: импорт STL заблокирован."); return; }
+    if (!cam::Available()) {
+        ::MessageBoxW(state.hwnd, L"CAM не собран. Включите FREZA_ENABLE_CAM и установите OpenCAMLib (docs/13-stl-cam.md). Загрузка координат и CSV доступна.", L"STL", MB_ICONINFORMATION);
+        return;
+    }
+    cam::Options options;
+    const auto units = ::SendMessageW(state.hUnits, CB_GETCURSEL, 0, 0);
+    options.units = units == 0 ? cam::Units::Millimetres : units == 1 ? cam::Units::Inches : cam::Units::Unspecified;
+    options.scale = CamNumber(state.hScale);
+    options.diameterMm = CamNumber(state.hDiameter);
+    options.samplingMm = CamNumber(state.hCamStep);
+    options.translationMm = {CamNumber(state.hTx), CamNumber(state.hTy), CamNumber(state.hTz)};
+    if (path.empty() && !BrowseFile(state.hwnd, false, L"STL (*.stl)\0*.stl\0\0", path)) return;
+    auto result = std::make_unique<cam::Result>();
+    std::string error;
+    ::SetCursor(::LoadCursorW(nullptr, IDC_WAIT));
+    const bool ok = cam::Calculate(std::filesystem::path(path), options, *result, error);
+    ::SetCursor(::LoadCursorW(nullptr, IDC_ARROW));
+    if (!ok) {
+        AddLog(state, L"STL: " + Utf8ToWide(error));
+        ::MessageBoxW(state.hwnd, Utf8ToWide(error).c_str(), L"STL / CAM", MB_ICONWARNING);
+        return;
+    }
+    const std::wstring summary = Utf8ToWide(cam::Describe(*result));
+    const std::wstring preview = summary + L"\r\n\r\nРазмещение задаётся пользователем; это не измеренная калибровка."
+        L"\r\nПроверьте границы. OK заменит траекторию; движение запускается отдельно.";
+    if (::MessageBoxW(state.hwnd, preview.c_str(), L"Проверка STL → TCP в базе", MB_OKCANCEL | MB_ICONINFORMATION) != IDOK) return;
+    if (state.egm.Running()) return;
+    state.points = result->basePoints;
+    state.camResult = std::move(result);
+    state.trajectoryPath = path;
+    ::SetWindowTextW(state.hWork, summary.c_str());
+    UpdateInfoLabels(state);
+    AddLog(state, L"STL: расчёт и проверка завершены. Траектория готова; EGM не запущен.");
+}
+
+bool CheckCamPath(WindowState& state, const std::vector<Point3>& path)
+{
+    if (!state.camResult) return true;
+    std::string error;
+    if (cam::ValidatePath(*state.camResult, path, error)) return true;
+    AddLog(state, L"CAM: " + Utf8ToWide(error));
+    ::MessageBoxW(state.hwnd, Utf8ToWide(error).c_str(), L"Проверка траектории", MB_ICONWARNING);
+    return false;
 }
 
 void OnStartTrajectory(WindowState& state)
@@ -489,6 +571,16 @@ void OnStartTrajectory(WindowState& state)
     {
         AddLog(state, L"для запуска нужна траектория минимум из двух точек");
         return;
+    }
+
+    if (state.camResult) {
+        if (state.egm.Running()) { AddLog(state, L"Сначала остановите текущую сессию EGM."); return; }
+        if (!CheckCamPath(state, state.points)) return;
+        const auto first = state.points.front();
+        if (std::abs(first.x-750)>1e-6 || std::abs(first.y)>1e-6 || std::abs(first.z-600)>1e-6) {
+            ::MessageBoxW(state.hwnd, L"Начало CAM должно совпадать с действующим home [750,0,600]. Подвод от home не рассчитывается. Проверьте перенос детали.", L"CAM", MB_ICONWARNING);
+            return;
+        }
     }
 
     // EGM в этом модуле настроен на базовую систему координат (corr_frame =
@@ -506,6 +598,13 @@ void OnStartTrajectory(WindowState& state)
     const double step = ReadDouble(state.hStep, 2.0);
     const double feed = ReadDouble(state.hFeed, 50.0);
 
+    if (state.camResult) {
+        std::string error;
+        if (!cam::ValidateInterpolation(*state.camResult, step, feed, error)) {
+            ::MessageBoxW(state.hwnd, Utf8ToWide(error).c_str(), L"CAM / интерполяция", MB_ICONWARNING);
+            return;
+        }
+    }
     std::vector<Point3> dense;
     std::vector<int> dwells;
     std::vector<unsigned char> corners;
@@ -515,6 +614,8 @@ void OnStartTrajectory(WindowState& state)
         AddLog(state, L"интерполяция не дала точек — проверьте шаг и траекторию");
         return;
     }
+
+    if (!CheckCamPath(state, dense)) return;
 
     AddLog(state, Format(L"интерполяция: точек %d, шаг %.1f мм, скорость %.1f мм/с",
                          static_cast<int>(dense.size()), step, feed));
@@ -657,6 +758,26 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         ::SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(state));
         ::SetTimer(hwnd, 1, 100, nullptr);
         LoadDefaultTrajectory(*state);
+        ::DragAcceptFiles(hwnd, TRUE);
+        return 0;
+    }
+
+    case WM_DROPFILES:
+    {
+        auto drop = reinterpret_cast<HDROP>(wParam);
+        std::wstring path;
+        if (::DragQueryFileW(drop, 0xFFFFFFFF, nullptr, 0) == 1) {
+            const UINT n = ::DragQueryFileW(drop, 0, nullptr, 0);
+            std::vector<wchar_t> buffer(static_cast<size_t>(n)+1);
+            ::DragQueryFileW(drop, 0, buffer.data(), n+1);
+            path = buffer.data();
+        }
+        ::DragFinish(drop);
+        auto* state = GetState(hwnd);
+        if (state && !path.empty()) {
+            if (_wcsicmp(std::filesystem::path(path).extension().c_str(), L".stl") == 0) OnStl(*state, path);
+            else AddLog(*state, L"Перетаскивание: поддерживается один файл STL.");
+        }
         return 0;
     }
 
@@ -683,6 +804,15 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         case kIdOpenTrajectory: OnOpenTrajectory(*state); return 0;
         case kIdSaveCsv:        OnSaveCsv(*state); return 0;
         case kIdLoadCsv:        OnLoadCsv(*state); return 0;
+        case kIdStl:            OnStl(*state); return 0;
+        case kIdDemo:
+            ::SendMessageW(state->hUnits, CB_SETCURSEL, 0, 0);
+            ::SetWindowTextW(state->hScale, L"1");
+            ::SetWindowTextW(state->hTx, L"750");
+            ::SetWindowTextW(state->hTy, L"0");
+            ::SetWindowTextW(state->hTz, L"599.5");
+            AddLog(*state, L"Демо-размещение пластины 20×20×0.5: перенос [750,0,599.5]. Это не калибровка стенда.");
+            return 0;
         case kIdStart:          OnStartTrajectory(*state); return 0;
         case kIdStop:           OnStop(*state); return 0;
         case kIdSendPoint:      OnSendManualPoint(*state); return 0;

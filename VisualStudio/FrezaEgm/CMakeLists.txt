@@ -10,6 +10,14 @@ set(NANOPB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/nanopb")
 set(GENERATED_DIR "${CMAKE_CURRENT_SOURCE_DIR}/generated")
 set(DATA_DIR "${CMAKE_CURRENT_SOURCE_DIR}/data")
 
+include(cmake/Cam.cmake)
+option(FREZA_OFFLINE_TESTS_ONLY "Build portable offline tests, never EGM/GUI" OFF)
+if(FREZA_OFFLINE_TESTS_ONLY)
+    enable_testing()
+    add_subdirectory(tests)
+    return()
+endif()
+
 # --- nanopb + сгенерированный код EGM ---------------------------------------
 add_library(nanopb STATIC
     "${NANOPB_DIR}/pb_common.c"
@@ -34,7 +42,8 @@ add_executable(FrezaEgm WIN32
     src/main.cpp
     src/app_window.cpp)
 
-target_link_libraries(FrezaEgm PRIVATE freza_core comctl32)
+target_link_libraries(FrezaEgm PRIVATE freza_core freza_cam comctl32 comdlg32 shell32)
+freza_copy_cam_runtime(FrezaEgm)
 target_compile_definitions(FrezaEgm PRIVATE
     UNICODE
     _UNICODE
@@ -59,3 +68,5 @@ endif()
 # --- тесты ------------------------------------------------------------------
 enable_testing()
 add_test(NAME freza_selftest COMMAND FrezaEgm_selftest)
+
+add_subdirectory(tests)

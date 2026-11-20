@@ -1,0 +1,34 @@
+name: Windows MSVC CAM regression
+on: [push, pull_request, workflow_dispatch]
+jobs:
+  windows:
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        cam: ['OFF', 'ON']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Build pinned OpenCAMLib
+        if: matrix.cam == 'ON'
+        shell: pwsh
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File ./VisualStudio/FrezaEgm/tools/build_opencamlib.ps1
+      - name: Configure MSVC x64
+        shell: pwsh
+        run: |
+          $source = "$pwd/VisualStudio/FrezaEgm"
+          $dependencyOptions = @()
+          if ('${{ matrix.cam }}' -eq 'ON') {
+            $dependencyOptions = @("-DCMAKE_PREFIX_PATH=$source/out/deps/ocl-Release", "-DBOOST_ROOT=$source/out/deps/boost_1_87_0")
+          }
+          cmake -S $source -B build -G "Visual Studio 17 2022" -A x64 -DFREZA_ENABLE_CAM=${{ matrix.cam }} @dependencyOptions
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Build Windows application and tests
+        run: cmake --build build --config Release --parallel 4
+      - name: Original selftest (including UDP loopback), regression, protected files
+        run: ctest --test-dir build -C Release --output-on-failure --verbose
+      - name: Generate reference path offline
+        if: matrix.cam == 'ON'
+        run: ./build/tests/Release/FrezaEgm_cam_cli.exe VisualStudio/FrezaEgm/data/cam/Primer1.STL build/Primer1-base.csv mm 1 4 0.5 750 0 599.5
