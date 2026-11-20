@@ -22,7 +22,7 @@ $dirty = & git -C $source status --porcelain
 if ($LASTEXITCODE -ne 0 -or $dirty) { throw 'Dependency has local changes; use a fresh -Root (nothing overwritten).' }
 $archive = Join-Path $Root 'boost_1_87_0.tar.gz'
 if (!(Test-Path $archive)) {
-    Invoke-WebRequest 'https://archives.boost.io/release/1.87.0/source/boost_1_87_0.tar.gz' -OutFile $archive
+    Invoke-WebRequest -UseBasicParsing 'https://archives.boost.io/release/1.87.0/source/boost_1_87_0.tar.gz' -OutFile $archive
 }
 $sha = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($sha -ne 'f55c340aa49763b1925ccf02b2e83f35fdcf634c9d5164a2acb87540173c741d') { throw 'Boost archive SHA256 mismatch.' }

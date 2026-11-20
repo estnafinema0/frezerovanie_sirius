@@ -79,8 +79,8 @@ void Cam(const fs::path& data,const fs::path& tmp) {
  reject("","empty file"); reject("solid bad\nendsolid bad\n","empty ASCII mesh");
  auto bytes=Read(binary);reject(bytes.substr(0,bytes.size()-1),"truncated binary count mismatch");
  auto n=bytes;n[80]=13;reject(n,"wrong binary triangle count");
- n=bytes;n[96]=0;n[97]=0;n[98]=char(0xc0);n[99]=char(0x7f);reject(n,"binary NaN coordinate");
- n=bytes;n[96]=0;n[97]=0;n[98]=char(0x80);n[99]=char(0x7f);reject(n,"binary Inf coordinate");
+ n=bytes;n[96]=0;n[97]=0;n[98]='\xC0';n[99]=char(0x7f);reject(n,"binary NaN coordinate");
+ n=bytes;n[96]=0;n[97]=0;n[98]='\x80';n[99]=char(0x7f);reject(n,"binary Inf coordinate");
  n=bytes;std::copy(n.begin()+96,n.begin()+108,n.begin()+108);reject(n,"degenerate triangle");
  n=Read(ascii);n.replace(n.find("vertex ")+7,4,"nan ");reject(n,"ASCII NaN");
  n=Read(ascii);n.replace(n.find("vertex ")+7,4,"inf ");reject(n,"ASCII Inf");

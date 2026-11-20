@@ -7,9 +7,11 @@ ASCII/binary STL, явные единицы/масштаб/перенос, ин�
 Контрольная пластина: 168 контактов → 5 точек, один верхний периметр 80 мм.
 
 Офлайн: CAM ON 66/66, OFF 46/46; protected-baseline CTest проходит.
-Windows GUI/MSVC, исходные 35 проверок с UDP-loopback и RobotStudio пока **не
-перепроверены**. Инструкции, область поддерживаемой геометрии и точные ограничения:
-[docs/13-stl-cam.md](docs/13-stl-cam.md). Добавлен Windows CI ON/OFF, ещё не запускался.
+Windows CI ON/OFF **прошёл**: MSVC 2022 x64, сборка приложения и все 3 CTest,
+включая исходный selftest/UDP-loopback. [Проверенный запуск](https://github.com/estnafinema0/frezerovanie_sirius/actions/runs/44800353312).
+Ручное тестирование GUI, RobotStudio и физический ABB ещё не выполнены.
+Инструкции и ограничения: [docs/13-stl-cam.md](docs/13-stl-cam.md).
+Для оператора: [docs/14-operator-windows.md](docs/14-operator-windows.md).
 
 Ниже сохранён исходный снимок состояния. Его результаты относятся к прежней версии.
 
