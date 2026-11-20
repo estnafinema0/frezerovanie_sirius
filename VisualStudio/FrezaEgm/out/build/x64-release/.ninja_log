@@ -1,0 +1,16 @@
+# ninja log v6
+84	374	8167148941524653	CMakeFiles/nanopb.dir/generated/egm3.pb.c.obj	6ba6bcbbe41a5a75
+33	485	8167148940992227	CMakeFiles/nanopb.dir/third_party/nanopb/pb_common.c.obj	e46c158466d11c00
+103	2616	8167148941717934	CMakeFiles/freza_core.dir/src/text_io.cpp.obj	765de93a5344eae8
+81	2475	8168086239836576	CMakeFiles/freza_core.dir/src/egm_client.cpp.obj	e6c11c718db424b3
+49	594	8167148941143496	CMakeFiles/nanopb.dir/third_party/nanopb/pb_encode.c.obj	4ff152f0fd65e4b0
+65	968	8167148941350575	CMakeFiles/nanopb.dir/third_party/nanopb/pb_decode.c.obj	5d5cc81f33c6eeb4
+168	1350	8167148942327642	CMakeFiles/FrezaEgm.dir/src/main.cpp.obj	bbf209d7851c9ed0
+136	2703	8167148942049461	CMakeFiles/freza_core.dir/src/csv_io.cpp.obj	cb68f901de73470d
+968	1100	8167148950373105	nanopb.lib	88f01687766b5f63
+2475	2579	8168086263785337	freza_core.lib	6d0f3cc100913f6
+25	2270	8168100870538903	CMakeFiles/FrezaEgm_selftest.dir/src/selftest.cpp.obj	3f397ba304891612
+24	1796	8168101220902031	CMakeFiles/FrezaEgm.dir/src/app_window.cpp.obj	c91556abd622ab56
+121	2979	8167148941894822	CMakeFiles/freza_core.dir/src/trajectory.cpp.obj	66ac20655f5e91e7
+2271	2520	8168100892997509	FrezaEgm_selftest.exe	b93c579f79a14c23
+1797	2035	8168101238626090	FrezaEgm.exe	f3c41267c547ee36

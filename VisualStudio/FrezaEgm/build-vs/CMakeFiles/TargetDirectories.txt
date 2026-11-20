@@ -1,0 +1,7 @@
+D:/developments/DSH_workspaces/freza_sirius/VisualStudio/FrezaEgm/build-vs/CMakeFiles/nanopb.dir
+D:/developments/DSH_workspaces/freza_sirius/VisualStudio/FrezaEgm/build-vs/CMakeFiles/freza_core.dir
+D:/developments/DSH_workspaces/freza_sirius/VisualStudio/FrezaEgm/build-vs/CMakeFiles/FrezaEgm.dir
+D:/developments/DSH_workspaces/freza_sirius/VisualStudio/FrezaEgm/build-vs/CMakeFiles/FrezaEgm_selftest.dir
+D:/developments/DSH_workspaces/freza_sirius/VisualStudio/FrezaEgm/build-vs/CMakeFiles/RUN_TESTS.dir
+D:/developments/DSH_workspaces/freza_sirius/VisualStudio/FrezaEgm/build-vs/CMakeFiles/ALL_BUILD.dir
+D:/developments/DSH_workspaces/freza_sirius/VisualStudio/FrezaEgm/build-vs/CMakeFiles/ZERO_CHECK.dir

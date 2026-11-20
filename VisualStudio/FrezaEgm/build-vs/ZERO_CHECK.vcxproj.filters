@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="D:\developments\DSH_workspaces\freza_sirius\VisualStudio\FrezaEgm\build-vs\CMakeFiles\6452742bef9c21d1bb4bcbfd7fa2062c\generate.stamp.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{79488D44-11BF-30E1-B200-1A9B8210BCB9}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

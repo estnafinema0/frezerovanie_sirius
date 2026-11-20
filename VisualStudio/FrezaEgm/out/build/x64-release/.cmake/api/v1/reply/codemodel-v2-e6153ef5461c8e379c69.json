@@ -1,0 +1,87 @@
+{
+	"configurations" : 
+	[
+		{
+			"directories" : 
+			[
+				{
+					"build" : ".",
+					"jsonFile" : "directory-.-Release-d0094a50bb2071803777.json",
+					"minimumCMakeVersion" : 
+					{
+						"string" : "3.20"
+					},
+					"projectIndex" : 0,
+					"source" : ".",
+					"targetIndexes" : 
+					[
+						0,
+						1,
+						2,
+						3
+					]
+				}
+			],
+			"name" : "Release",
+			"projects" : 
+			[
+				{
+					"directoryIndexes" : 
+					[
+						0
+					],
+					"name" : "FrezaEgm",
+					"targetIndexes" : 
+					[
+						0,
+						1,
+						2,
+						3
+					]
+				}
+			],
+			"targets" : 
+			[
+				{
+					"directoryIndex" : 0,
+					"id" : "FrezaEgm::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-FrezaEgm-Release-6d0859daf3600891b700.json",
+					"name" : "FrezaEgm",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "FrezaEgm_selftest::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-FrezaEgm_selftest-Release-c35e5bdb9e59dd35ae75.json",
+					"name" : "FrezaEgm_selftest",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "freza_core::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-freza_core-Release-4de323607460c214f6bd.json",
+					"name" : "freza_core",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "nanopb::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-nanopb-Release-a0079ed2b8d321dcb23f.json",
+					"name" : "nanopb",
+					"projectIndex" : 0
+				}
+			]
+		}
+	],
+	"kind" : "codemodel",
+	"paths" : 
+	{
+		"build" : "D:/developments/DSH_workspaces/freza_sirius/VisualStudio/FrezaEgm/out/build/x64-release",
+		"source" : "D:/developments/DSH_workspaces/freza_sirius/VisualStudio/FrezaEgm"
+	},
+	"version" : 
+	{
+		"major" : 2,
+		"minor" : 8
+	}
+}

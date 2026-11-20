@@ -1,0 +1,10 @@
+^D:\DEVELOPMENTS\DSH_WORKSPACES\FREZA_SIRIUS\VISUALSTUDIO\FREZAEGM\BUILD-VS\CMAKEFILES\6452742BEF9C21D1BB4BCBFD7FA2062C\GENERATE.STAMP.RULE
+setlocal
+"C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" -SD:/developments/DSH_workspaces/freza_sirius/VisualStudio/FrezaEgm -BD:/developments/DSH_workspaces/freza_sirius/VisualStudio/FrezaEgm/build-vs --check-stamp-list CMakeFiles/generate.stamp.list --vs-solution-file D:/developments/DSH_workspaces/freza_sirius/VisualStudio/FrezaEgm/build-vs/FrezaEgm.sln
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

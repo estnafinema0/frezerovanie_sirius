@@ -1,0 +1,60 @@
+Start testing: Nov 20 13:51 RTZ 2 (����)
+----------------------------------------------------------
+1/1 Testing: freza_selftest
+1/1 Test: freza_selftest
+Command: "D:/developments/DSH_workspaces/freza_sirius/VisualStudio/FrezaEgm/build-vs/Release/FrezaEgm_selftest.exe"
+Directory: D:/developments/DSH_workspaces/freza_sirius/VisualStudio/FrezaEgm/build-vs
+"freza_selftest" start time: Nov 20 13:51 RTZ 2 (����)
+Output:
+----------------------------------------------------------
+=== FrezaEgm: самотест ===
+Траектория: D:/developments/DSH_workspaces/freza_sirius/VisualStudio/FrezaEgm/data/trajectory.gcode
+
+[ OK ] файл траектории прочитан
+[ OK ] в траектории 5 точек (замкнутый квадрат)
+[ OK ] точка 1 = (750, 0, 600)
+[ OK ] точка 2 = (850, 0, 600)
+[ OK ] точка 3 = (850, 100, 600)
+[ OK ] точка 4 = (750, 100, 600)
+[ OK ] точка 5 = (750, 0, 600) - квадрат замкнут
+[ OK ] CSV сохранён
+       файл: C:\Users\Maksim\AppData\Local\Temp\dsh-Xjw8Gv\freza_points_selftest.csv
+[ OK ] CSV прочитан обратно
+[ OK ] количество точек в CSV совпадает
+[ OK ] координаты в CSV совпадают с исходными
+[ OK ] первое смещение = 0,0,0
+[ OK ] смещение третьей точки = 100,100,0
+[ OK ] последнее смещение = 0,0,0 (возврат домой)
+[ OK ] интерполяция разбивает квадрат на мелкие шаги
+[ OK ] таблица времени удержания совпадает по размеру
+[ OK ] интерполяция начинается в стартовой точке
+[ OK ] интерполяция заканчивается в стартовой точке
+[ OK ] шаг 2 мм при подаче 25 мм/с = 80 мс
+[ OK ] EgmSensor сериализуется
+       байты (80): 0A 07 08 2A 10 E8 07 18 03 12 45 12 43 0A 1B 09 00 00 00 00 00 00 24 40 11 00 00 00 00 00 00 00 00 19 00 00 00 00 00 00 00 00 12 24 09 00 00 00 00 00 00 F0 3F 11 00 00 00 00 00 00 00 00 19 00 00 00 00 00 00 00 00 21 00 00 00 00 00 00 00 00 
+[ OK ] EgmSensor разбирается обратно
+[ OK ] seqno передаётся
+[ OK ] mtype = MSGTYPE_CORRECTION
+[ OK ] planned.cartesian.pos присутствует
+[ OK ] x = 10
+[ OK ] y = 0 передаётся явно (важно для proto2-парсера ABB)
+[ OK ] z = 0 передаётся явно
+[ OK ] ориентация передаётся (единичный кватернион)
+[ OK ] создан сокет-заглушка контроллера
+[ OK ] EGM-клиент занял UDP-порт 6510
+[ OK ] клиент прислал десятки EgmSensor (приём работает)
+[ OK ] клиент принял EgmRobot (обратная связь работает)
+[ OK ] клиент отправил EgmSensor
+[ OK ] первая точка — смещение 0,0,0
+[ OK ] вторая точка — смещение 10,0,0
+
+=== Итог: УСПЕХ (ошибок: 0) ===
+<end of output>
+Test time =   1.42 sec
+----------------------------------------------------------
+Test Passed.
+"freza_selftest" end time: Nov 20 13:51 RTZ 2 (����)
+"freza_selftest" time elapsed: 00:00:01
+----------------------------------------------------------
+
+End testing: Nov 20 13:51 RTZ 2 (����)

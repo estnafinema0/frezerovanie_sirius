@@ -1,0 +1,7 @@
+D:/developments/DSH_workspaces/freza_sirius/VisualStudio/FrezaEgm/out/build/x64-release/CMakeFiles/nanopb.dir
+D:/developments/DSH_workspaces/freza_sirius/VisualStudio/FrezaEgm/out/build/x64-release/CMakeFiles/freza_core.dir
+D:/developments/DSH_workspaces/freza_sirius/VisualStudio/FrezaEgm/out/build/x64-release/CMakeFiles/FrezaEgm.dir
+D:/developments/DSH_workspaces/freza_sirius/VisualStudio/FrezaEgm/out/build/x64-release/CMakeFiles/FrezaEgm_selftest.dir
+D:/developments/DSH_workspaces/freza_sirius/VisualStudio/FrezaEgm/out/build/x64-release/CMakeFiles/test.dir
+D:/developments/DSH_workspaces/freza_sirius/VisualStudio/FrezaEgm/out/build/x64-release/CMakeFiles/edit_cache.dir
+D:/developments/DSH_workspaces/freza_sirius/VisualStudio/FrezaEgm/out/build/x64-release/CMakeFiles/rebuild_cache.dir

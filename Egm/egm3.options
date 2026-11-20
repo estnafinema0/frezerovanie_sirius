@@ -1,0 +1,21 @@
+# Параметры генератора nanopb для egm3.proto.
+#
+# Файл должен лежать рядом с egm3.proto и называться <имя>.options.
+# Генерация (см. tools/generate_proto.ps1):
+#   protoc --plugin=protoc-gen-nanopb=<nanopb>\generator\protoc-gen-nanopb.bat \
+#          --nanopb_out=<каталог> -I. egm3.proto
+#
+# ВАЖНО: имена в этом файле указываются БЕЗ префикса пакета, потому что ниже
+# включено mangle_names:M_STRIP_PACKAGE (иначе генератор их не найдёт).
+
+# 1. Имена типов без префикса пакета: abb_egm_EgmSensor -> EgmSensor.
+* mangle_names:M_STRIP_PACKAGE
+
+# 2. repeated-поля в nanopb статически размещаются в структуре, поэтому для них
+#    нужно явно задать максимальное количество элементов. В EGM это максимум
+#    6 осей / 6 значений скорости / 6 сил.
+EgmJoints.joints          max_count:6
+EgmExternalJoints.joints  max_count:6
+EgmCartesianSpeed.value   max_count:6
+EgmTestSignals.signals    max_count:6
+EgmMeasuredForce.force    max_count:6

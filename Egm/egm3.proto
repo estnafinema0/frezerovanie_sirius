@@ -1,0 +1,196 @@
+// Определение интерфейса ABB EGM V1.1 в синтаксисе protobuf 3.
+//
+// Оригинал: egm.proto (syntax = "proto2"), лежит рядом и НЕ изменяется.
+// Этот файл — его proto3-перевод для нового приложения (FrezaEgm).
+//
+// Что изменилось по сравнению с proto2-версией:
+//   1. Убраны метки required/optional там, где они были «служебными» для proto2,
+//      и убраны значения [default = ...] (в proto3 они запрещены).
+//   2. Поля, которые в proto2 были required, объявлены как optional (proto3
+//      explicit presence). Это принципиально: proto3 по умолчанию НЕ передаёт
+//      поля со значением 0, а контроллер ABB разбирает сообщение как proto2 и
+//      ждёт presence у required-полей (например EgmCartesian.x/y/z). С optional
+//      клиент выставляет has_x = true и ноль уходит в поток.
+//   3. Первое значение каждого enum — 0 (требование proto3), в оригинале уже так.
+//   4. Имена пакета, сообщений, полей и тегов сохранены — сообщение побайтно
+//      совместимо с proto2-версией на проводе.
+//
+// Требования к генератору:
+//   * protoc >= 3.15 (нужен proto3 "optional"). Проверено на protoc 33.6.
+//   * для C++/C-кода используется nanopb (см. egm3.options).
+//
+// Направления сообщений:
+//   EgmRobot  — контроллер -> ПК (телеметрия/обратная связь)
+//   EgmSensor — ПК -> контроллер (коррекция положения/скорости)
+
+syntax = "proto3";
+
+package abb.egm;
+
+// Заголовок любого сообщения EGM.
+message EgmHeader {
+    optional uint32 seqno = 1;  // порядковый номер (позволяет искать потери)
+    optional uint32 tm = 2;     // метка времени контроллера, мс
+
+    enum MessageType {
+        MSGTYPE_UNDEFINED = 0;
+        MSGTYPE_COMMAND = 1;         // зарезервировано
+        MSGTYPE_DATA = 2;            // отправляет контроллер
+        MSGTYPE_CORRECTION = 3;      // отправляет сенсор (коррекция положения)
+        MSGTYPE_PATH_CORRECTION = 4; // отправляет сенсор (коррекция пути)
+    }
+
+    MessageType mtype = 3;
+}
+
+// Декартова позиция, мм.
+message EgmCartesian {
+    optional double x = 1;
+    optional double y = 2;
+    optional double z = 3;
+}
+
+// Ориентация кватернионом.
+message EgmQuaternion {
+    optional double u0 = 1;
+    optional double u1 = 2;
+    optional double u2 = 3;
+    optional double u3 = 4;
+}
+
+// Ориентация углами Эйлера, градусы.
+message EgmEuler {
+    optional double x = 1;
+    optional double y = 2;
+    optional double z = 3;
+}
+
+// Время (секунды и микросекунды с 1 января 1970).
+message EgmClock {
+    optional uint64 sec = 1;
+    optional uint64 usec = 2;
+}
+
+// Поза: позиция + ориентация. Если заданы и orient, и euler, приоритет у euler
+// (см. комментарий в оригинальном egm.proto).
+message EgmPose {
+    EgmCartesian pos = 1;
+    EgmQuaternion orient = 2;
+    EgmEuler euler = 3;
+}
+
+// Массив из 6 значений скорости, мм/с или град/с.
+message EgmCartesianSpeed {
+    repeated double value = 1;
+}
+
+// Углы шарниров, градусы (для TCP-робота — 6 значений).
+message EgmJoints {
+    repeated double joints = 1;
+}
+
+// Углы дополнительных осей: градусы для вращательных, мм для линейных.
+message EgmExternalJoints {
+    repeated double joints = 1;
+}
+
+// Планируемая позиция: шарниры и/или декартова поза + внешние оси.
+// Используется и для стриминга позиции (контроллер), и для коррекции (сенсор).
+message EgmPlanned {
+    EgmJoints joints = 1;
+    EgmPose cartesian = 2;
+    EgmJoints externalJoints = 3;
+    EgmClock time = 4;
+}
+
+// Ссылка по скорости: шарниры или декартовы скорости + внешние оси.
+message EgmSpeedRef {
+    EgmJoints joints = 1;
+    EgmCartesianSpeed cartesians = 2;
+    EgmJoints externalJoints = 3;
+}
+
+// Коррекция пути: измерение сенсора и его «возраст».
+message EgmPathCorr {
+    optional EgmCartesian pos = 1; // измерение (x, y, z) в СК инструмента сенсора
+    optional uint32 age = 2;       // возраст измерения, мс
+}
+
+// Обратная связь: фактическая измеренная позиция.
+message EgmFeedBack {
+    EgmJoints joints = 1;
+    EgmPose cartesian = 2;
+    EgmJoints externalJoints = 3;
+    EgmClock time = 4;
+}
+
+// Состояние двигателей.
+message EgmMotorState {
+    enum MotorStateType {
+        MOTORS_UNDEFINED = 0;
+        MOTORS_ON = 1;
+        MOTORS_OFF = 2;
+    }
+
+    optional MotorStateType state = 1;
+}
+
+// Состояние EGM.
+message EgmMCIState {
+    enum MCIStateType {
+        MCI_UNDEFINED = 0;
+        MCI_ERROR = 1;
+        MCI_STOPPED = 2;
+        MCI_RUNNING = 3;
+    }
+
+    optional MCIStateType state = 1;
+}
+
+// Состояние выполнения RAPID.
+message EgmRapidCtrlExecState {
+    enum RapidCtrlExecStateType {
+        RAPID_UNDEFINED = 0;
+        RAPID_STOPPED = 1;
+        RAPID_RUNNING = 2;
+    }
+
+    optional RapidCtrlExecStateType state = 1;
+}
+
+// Тестовые сигналы.
+message EgmTestSignals {
+    repeated double signals = 1;
+}
+
+// Измеренные силы, 6 значений.
+message EgmMeasuredForce {
+    repeated double force = 1;
+}
+
+// Исходящее сообщение контроллера (контроллер -> ПК).
+message EgmRobot {
+    EgmHeader header = 1;
+    EgmFeedBack feedBack = 2;
+    EgmPlanned planned = 3;
+    EgmMotorState motorState = 4;
+    EgmMCIState mciState = 5;
+    optional bool mciConvergenceMet = 6;
+    EgmTestSignals testSignals = 7;
+    EgmRapidCtrlExecState rapidExecState = 8;
+    EgmMeasuredForce measuredForce = 9;
+    optional double utilizationRate = 10;
+}
+
+// Входящее сообщение для контроллера (ПК -> контроллер), режим guidance.
+message EgmSensor {
+    EgmHeader header = 1;
+    EgmPlanned planned = 2;
+    EgmSpeedRef speedRef = 3;
+}
+
+// Входящее сообщение для контроллера, режим path correction.
+message EgmSensorPathCorr {
+    EgmHeader header = 1;
+    EgmPathCorr pathCorr = 2;
+}
