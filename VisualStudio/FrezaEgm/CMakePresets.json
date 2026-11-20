@@ -1,4 +1,4 @@
-﻿{
+{
     "version": 3,
     "configurePresets": [
         {
@@ -55,6 +55,24 @@
             "inherits": "x86-debug",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Release"
+            }
+        },
+        {
+            "name": "x64-cam-release",
+            "displayName": "x64 Release + STL CAM",
+            "inherits": "x64-release",
+            "cacheVariables": {
+                "FREZA_ENABLE_CAM": "ON",
+                "CMAKE_PREFIX_PATH": "${sourceDir}/out/deps/ocl-Release",
+                "BOOST_ROOT": "${sourceDir}/out/deps/boost_1_87_0"
+            }
+        },
+        {
+            "name": "x64-no-cam-release",
+            "displayName": "x64 Release (without CAM)",
+            "inherits": "x64-release",
+            "cacheVariables": {
+                "FREZA_ENABLE_CAM": "OFF"
             }
         }
     ]
