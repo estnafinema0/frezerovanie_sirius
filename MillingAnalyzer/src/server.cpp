@@ -9,8 +9,8 @@
 #include <mutex>
 #include <random>
 #ifdef _WIN32
-#include <windows.h>
 #include <shellapi.h>
+#include <windows.h>
 #endif
 namespace {
 std::string errorJson(const std::string &text) {
@@ -42,6 +42,7 @@ milling::Options options(const httplib::Request &r) {
   o.diameter = parameter(r, "diameter", 2.5);
   o.length = parameter(r, "length", 20);
   o.feed = parameter(r, "feed", 10);
+  o.clearance = parameter(r, "clearance", 5);
   double face = parameter(r, "face", 1), sign = parameter(r, "sign", 1);
   if (face < 1 || face > 1000 || face != std::floor(face) ||
       (sign != 1 && sign != -1))

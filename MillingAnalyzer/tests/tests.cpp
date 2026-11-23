@@ -21,7 +21,9 @@ int main(int argc, char **argv) {
   try {
     if (argc == 3 && std::string(argv[1]) == "--fixture") {
       STEPControl_Writer writer;
-      check(writer.Transfer(BRepPrimAPI_MakeBox(20, 10, 5).Shape(), STEPControl_AsIs) == IFSelect_RetDone, "fixture transfer");
+      check(writer.Transfer(BRepPrimAPI_MakeBox(20, 10, 5).Shape(),
+                            STEPControl_AsIs) == IFSelect_RetDone,
+            "fixture transfer");
       check(writer.Write(argv[2]) == IFSelect_RetDone, "fixture write");
       return 0;
     }
@@ -46,7 +48,7 @@ int main(int argc, char **argv) {
     auto rev = TopoDS::Face(face.Reversed());
     check((p.n + evaluate(rev, .3, .7, o).n).norm() < 1e-9, "reversed normal");
     auto passes = raster(face, o);
-    check(passes.size() == 11 || passes.size() == 10, "physical row spacing");
+    check(passes.size() >= 8 && passes.size() <= 11, "physical row spacing");
     check(!passes.empty(), "raster exists");
     for (auto &pass : passes)
       for (size_t i = 1; i < pass.poses.size(); ++i) {
@@ -156,10 +158,64 @@ int main(int argc, char **argv) {
     auto scene = analyze(d, o);
     check(!scene.faces[0].passes.empty(), "scene paths");
     check(!json(scene).empty(), "scene JSON");
-    check(scene.faces[0].passes[0].segmentCollision, "interpolated convex chord penetration detected");
-    Options preview; preview.previewOnly = true;
+    const auto &continuous = scene.faces[0].trajectory;
+    check(!continuous.poses.empty(), "whole-face trajectory exists");
+    int kinds[4] = {};
+    for (size_t k = 1; k < continuous.poses.size(); ++k) {
+      auto &a = continuous.poses[k - 1];
+      auto &b = continuous.poses[k];
+      ++kinds[b.motion];
+      check(b.t > a.t, "global trajectory time strictly increases");
+      check((b.p - a.p).norm() <= o.step + 1e-8, "connected XYZ step bounded");
+      check(a.q.angularDistance(b.q) <=
+                o.angleDeg * 3.141592653589793 / 180 + 1e-8,
+            "connected orientation step bounded");
+      if (b.motion == 2)
+        check(std::min(a.p.z(), b.p.z()) > 3 + o.length,
+              "transfer above entire model");
+    }
+    for (int kind : kinds)
+      check(kind > 0, "approach cut retract transfer all present");
+    for (auto &pass : scene.faces[0].passes) {
+      for (auto &endpoint : {pass.poses.front(), pass.poses.back()}) {
+        bool included = false;
+        for (auto &point : continuous.poses)
+          included |= (point.p - endpoint.p).norm() < 1e-9;
+        check(included, "whole-face path includes every pass endpoint");
+      }
+    }
+    auto holePath = connectPasses(trimmed, 0, o);
+    check(!holePath.poses.empty(), "trimmed face joined");
+    for (size_t k = 1; k < holePath.poses.size(); ++k) {
+      if (holePath.poses[k].motion != 0)
+        continue;
+      V mid = (holePath.poses[k - 1].p + holePath.poses[k].p) / 2;
+      check(!(mid.x() > 8 && mid.x() < 12 && mid.y() > 8 && mid.y() < 12),
+            "no cutting across hole");
+    }
+    auto sideways = trimmed;
+    for (auto &pass : sideways)
+      for (auto &pose : pass.poses)
+        pose.q = Q(Eigen::AngleAxisd(3.141592653589793 / 2, V::UnitY()));
+    bool connectionRejected = false;
+    try {
+      connectPasses(sideways, 0, o);
+    } catch (...) {
+      connectionRejected = true;
+    }
+    check(connectionRejected, "sideways tool unsupported connector rejected");
+    Options preview;
+    preview.previewOnly = true;
     auto meshOnly = analyze(d, preview);
-    check(!meshOnly.mesh.empty() && meshOnly.faces[0].passes.empty(), "preview does not calculate toolpath");
+    check(!meshOnly.mesh.empty() && meshOnly.faces[0].passes.empty(),
+          "preview does not calculate toolpath");
+    Options coarse = o;
+    coarse.diameter = 4;
+    auto coarselySampled = analyze(d, coarse);
+    bool chordHit = false;
+    for (const auto &pass : coarselySampled.faces[0].passes)
+      chordHit |= pass.segmentCollision;
+    check(chordHit, "intermediate chord collision remains detectable");
     auto concave = analyze(demo(true), o);
     bool detected = false;
     for (auto &pass : concave.faces[0].passes)

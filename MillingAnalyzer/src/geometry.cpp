@@ -2,9 +2,11 @@
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepBndLib.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
+#include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepClass3d_SolidClassifier.hxx>
 #include <BRepClass_FaceClassifier.hxx>
+#include <BRepExtrema_DistShapeShape.hxx>
 #include <BRepMesh_IncrementalMesh.hxx>
 #include <BRepTools.hxx>
 #include <BRep_Tool.hxx>
@@ -68,14 +70,16 @@ double angle(const V &a, const V &b) {
 }
 } // namespace
 void Options::validate() const {
-  for (double x : {spacing, step, chord, angleDeg, diameter, length, feed})
+  for (double x :
+       {spacing, step, chord, angleDeg, diameter, length, feed, clearance})
     require(std::isfinite(x) && x > 0,
             "Parameters must be finite and positive");
   require(spacing >= .1 && spacing <= 100 && step >= .05 && step <= 100 &&
               chord >= 1e-5 && chord <= 1 && angleDeg >= .1 && angleDeg <= 30,
           "Sampling parameters outside supported range");
-  require(diameter <= 100 && length <= 200 && feed <= 1000 &&
-              (normalSign == 1 || normalSign == -1) && face >= 0,
+  require(clearance <= 200 && diameter <= 100 && length <= 200 &&
+              feed <= 1000 && (normalSign == 1 || normalSign == -1) &&
+              face >= 0,
           "Invalid tool, feed, face or normal sign");
 }
 Model loadStep(const std::filesystem::path &path) {
@@ -198,6 +202,8 @@ Pose evaluate(const TopoDS_Face &face, double u, double v, const Options &o) {
   n.normalize();
   Pose pose;
   pose.p = vec(p);
+  pose.u = u;
+  pose.v = v;
   pose.n = n;
   pose.q = frame(o.normalSign * n, x);
   require(pose.p.allFinite(), "Nonfinite surface point");
@@ -237,6 +243,9 @@ std::vector<std::pair<double, double>> intervals(const TopoDS_Face &face,
 }
 std::vector<Pass> raster(const TopoDS_Face &f, const Options &o) {
   o.validate();
+  require(
+      o.spacing <= o.diameter,
+      "Pass spacing exceeds cutter diameter: uncovered strips would remain");
   double u0, u1, v0, v1;
   BRepTools::UVBounds(f, u0, u1, v0, v1);
   require(std::isfinite(u0) && std::isfinite(u1) && std::isfinite(v0) &&
@@ -253,12 +262,32 @@ std::vector<Pass> raster(const TopoDS_Face &f, const Options &o) {
                .norm();
     vLength = std::max(vLength, d);
   }
-  int rows = std::max(1, int(std::ceil(vLength / o.spacing)));
+  const double margin = o.diameter / 2 + .02;
+  require(vLength > 2 * margin, "Face too narrow for tool diameter");
+  int rows =
+      std::max(2, int(std::ceil((vLength - 2 * margin) / o.spacing)) + 1);
   require(rows <= 1000, "Raster row budget exceeded");
   std::vector<Pass> result;
-  size_t count = 0;
+  size_t count = 0, edgeWork = 0;
+  std::vector<TopoDS_Shape> edges;
+  for (TopExp_Explorer edge(f, TopAbs_EDGE); edge.More(); edge.Next())
+    edges.push_back(edge.Current());
+  auto fits = [&](const Pose &p) {
+    auto vertex =
+        BRepBuilderAPI_MakeVertex(gp_Pnt(p.p.x(), p.p.y(), p.p.z())).Shape();
+    for (const auto &edge : edges) {
+      require(++edgeWork <= 2000000, "Boundary clearance work budget exceeded");
+      BRepExtrema_DistShapeShape distance(vertex, edge);
+      require(distance.IsDone(), "Cannot measure trim clearance");
+      if (distance.Value() < margin - 1e-7)
+        return false;
+    }
+    return true;
+  };
   for (int row = 0; row < rows; ++row) {
-    double v = v0 + (v1 - v0) * (row + .5) / rows;
+    double fraction =
+        margin / vLength + (1 - 2 * margin / vLength) * row / (rows - 1.);
+    double v = v0 + (v1 - v0) * fraction;
     auto spans = intervals(f, v);
     if (row % 2)
       std::reverse(spans.begin(), spans.end());
@@ -272,7 +301,7 @@ std::vector<Pass> raster(const TopoDS_Face &f, const Options &o) {
       split = [&](double a, double b, const Pose &pa, const Pose &pb,
                   int depth) {
         require(++count <= 100000, "Raster sampling budget exceeded");
-        bool ok = (pb.p - pa.p).norm() <= o.step &&
+        bool ok = (pb.p - pa.p).norm() <= std::min(o.step, o.diameter / 4) &&
                   angle(pa.n, pb.n) <= o.angleDeg * pi / 180 &&
                   pa.q.angularDistance(pb.q) <= o.angleDeg * pi / 180;
         Pose mid = evaluate(f, (a + b) / 2, v, o);
@@ -303,11 +332,110 @@ std::vector<Pass> raster(const TopoDS_Face &f, const Options &o) {
           p.t =
               pass.poses[i - 1].t + (p.p - pass.poses[i - 1].p).norm() / o.feed;
       }
-      result.push_back(std::move(pass));
+      // Retain only centre poses with radius clearance to every real trim edge.
+      // Conservative discrete inset; never connect across a removed span.
+      Pass clipped;
+      auto addClipped = [&](Pose p) {
+        V tangent = (end > begin ? 1. : -1.) *
+                    (evaluate(f, p.u, p.v, o).q * V::UnitX());
+        p.q = frame(o.normalSign * p.n, tangent,
+                    clipped.poses.empty() ? nullptr : &clipped.poses.back().q);
+        p.t = clipped.poses.empty()
+                  ? 0
+                  : clipped.poses.back().t +
+                        (p.p - clipped.poses.back().p).norm() / o.feed;
+        clipped.poses.push_back(p);
+      };
+      auto boundary = [&](Pose valid, Pose invalid) {
+        for (int it = 0; it < 25; ++it) {
+          Pose mid = evaluate(f, (valid.u + invalid.u) / 2, v, o);
+          if (fits(mid))
+            valid = mid;
+          else
+            invalid = mid;
+        }
+        return valid;
+      };
+      bool previousFits = false;
+      for (size_t k = 0; k < pass.poses.size(); ++k) {
+        auto p = pass.poses[k];
+        bool valid = fits(p);
+        if (valid) {
+          if (k && !previousFits)
+            addClipped(boundary(p, pass.poses[k - 1]));
+          addClipped(p);
+        } else if (previousFits) {
+          addClipped(boundary(pass.poses[k - 1], p));
+          if (clipped.poses.size() >= 2)
+            result.push_back(std::move(clipped));
+          clipped = Pass{};
+        }
+        previousFits = valid;
+      }
+      if (clipped.poses.size() >= 2)
+        result.push_back(std::move(clipped));
       require(result.size() <= 4000, "Pass budget exceeded");
     }
   }
   return result;
+}
+Pass connectPasses(const std::vector<Pass> &passes, double modelTop,
+                   const Options &o) {
+  require(!passes.empty(), "No tool-centre passes fit this face");
+  Pass path;
+  // Transfers are above the complete model. Even during SLERP, the entire
+  // cylinder lies above it (bounding sphere radius from TCP).
+  const double safeZ =
+      modelTop + std::hypot(o.length, o.diameter / 2) + o.clearance;
+  auto lifted = [&](Pose p) {
+    V axis = p.q * V::UnitZ();
+    require(axis.z() > .2, "Connected strategy requires tool +Z facing upward; "
+                           "reorient the CAD model");
+    p.p += axis * ((safeZ - p.p.z()) / axis.z());
+    return p;
+  };
+  auto append = [&](Pose end, int motion) {
+    end.motion = motion;
+    if (path.poses.empty()) {
+      end.t = 0;
+      path.poses.push_back(end);
+      return;
+    }
+    Pose begin = path.poses.back();
+    double distance = (end.p - begin.p).norm();
+    double rotation = begin.q.angularDistance(end.q);
+    if (distance < 1e-10 && rotation < 1e-10)
+      return;
+    int steps = std::max(
+        1, int(std::ceil(std::max(distance / o.step,
+                                  rotation / (o.angleDeg * pi / 180)))));
+    require(path.poses.size() + steps <= 200000,
+            "Connected path point budget exceeded");
+    // Explicit angular rate prevents zero-time rotations at row reversals.
+    double duration = std::max(distance / o.feed, rotation / (30 * pi / 180));
+    for (int k = 1; k <= steps; ++k) {
+      double t = double(k) / steps;
+      Pose p;
+      p.p = (1 - t) * begin.p + t * end.p;
+      p.q = begin.q.slerp(t, end.q).normalized();
+      if (p.q.dot(path.poses.back().q) < 0)
+        p.q.coeffs() *= -1;
+      p.n = (p.q * V::UnitZ()) * o.normalSign;
+      p.t = begin.t + t * duration;
+      p.motion = motion;
+      path.poses.push_back(p);
+    }
+  };
+  append(lifted(passes.front().poses.front()), 2);
+  for (const auto &pass : passes) {
+    require(pass.poses.size() >= 2, "Empty pass");
+    append(lifted(pass.poses.front()), 2);
+    append(pass.poses.front(), 3);
+    for (size_t k = 1; k < pass.poses.size(); ++k)
+      append(pass.poses[k], 0);
+    append(lifted(pass.poses.back()), 1);
+  }
+  return path;
 }
 bool triangleCollision(const Triangle &tri, const Pose &pose, double radius,
                        double length) {
@@ -445,7 +573,18 @@ Scene analyze(const Model &model, const Options &o) {
         }
         return false;
       };
-      for (auto &pass : face.passes) {
+      try {
+        face.trajectory = connectPasses(face.passes, z1, o);
+      } catch (const std::exception &e) {
+        face.connectionError = e.what();
+      }
+      std::vector<Pass *> checked;
+      for (auto &p : face.passes)
+        checked.push_back(&p);
+      if (!face.trajectory.poses.empty())
+        checked.push_back(&face.trajectory);
+      for (auto *entry : checked) {
+        auto &pass = *entry;
         for (size_t k = 0; k < pass.poses.size(); ++k) {
           pass.poses[k].collision = collides(pass.poses[k]);
           if (k) {
@@ -461,7 +600,9 @@ Scene analyze(const Model &model, const Options &o) {
               Pose p;
               p.p = (1 - t) * a.p + t * b.p;
               p.q = a.q.slerp(t, b.q);
-              pass.segmentCollision |= collides(p);
+              bool hit = collides(p);
+              b.sweepCollision |= hit;
+              pass.segmentCollision |= hit;
             }
           }
         }
@@ -469,9 +610,11 @@ Scene analyze(const Model &model, const Options &o) {
     } catch (const Standard_Failure &e) {
       face.error = e.GetMessageString() ? e.GetMessageString() : "OCCT error";
       face.passes.clear();
+      face.trajectory = Pass{};
     } catch (const std::exception &e) {
       face.error = e.what();
       face.passes.clear();
+      face.trajectory = Pass{};
     }
     scene.faces.push_back(std::move(face));
   }
@@ -483,6 +626,7 @@ std::string json(const Scene &s) {
     << "{\"version\":1,\"units\":\"mm\",\"sourceUnits\":"
     << quote(s.sourceUnits) << ",\"diameter\":" << s.options.diameter
     << ",\"length\":" << s.options.length
+    << ",\"clearance\":" << s.options.clearance
     << ",\"normalSign\":" << s.options.normalSign
     << ",\"spacing\":" << s.options.spacing << ",\"step\":" << s.options.step
     << ",\"chord\":" << s.options.chord
@@ -518,7 +662,7 @@ std::string json(const Scene &s) {
     }
     o << "],\"passes\":[";
     bool ps = false;
-    for (auto &p : f.passes) {
+    auto writePass = [&](const Pass &p) {
       if (ps)
         o << ',';
       ps = true;
@@ -532,11 +676,19 @@ std::string json(const Scene &s) {
         o << "{\"p\":" << vectorJson(v.p) << ",\"n\":" << vectorJson(v.n)
           << ",\"q\":[" << v.q.w() << ',' << v.q.x() << ',' << v.q.y() << ','
           << v.q.z() << "],\"t\":" << v.t
-          << ",\"collision\":" << (v.collision ? "true" : "false") << '}';
+          << ",\"collision\":" << (v.collision ? "true" : "false")
+          << ",\"sweepCollision\":" << (v.sweepCollision ? "true" : "false")
+          << ",\"motion\":" << v.motion << '}';
       }
       o << "]}";
-    }
-    o << "]}";
+    };
+    for (const auto &p : f.passes)
+      writePass(p);
+    o << "],\"connectionError\":" << quote(f.connectionError)
+      << ",\"trajectory\":";
+    ps = false;
+    writePass(f.trajectory);
+    o << "}";
   }
   o << "]}";
   return o.str();

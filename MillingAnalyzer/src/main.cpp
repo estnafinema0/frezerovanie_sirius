@@ -3,11 +3,13 @@
 #include "viewer_resource.h"
 #include <Standard_Failure.hxx>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <locale>
+#include <sstream>
 #ifdef _WIN32
-#include <windows.h>
 #include <shellapi.h>
+#include <windows.h>
 #endif
 int run(std::vector<std::string> args) {
   if (args.size() == 1 || (args.size() >= 2 && args[1] == "--serve"))
@@ -51,6 +53,8 @@ int run(std::vector<std::string> args) {
         options.diameter = number(value());
       else if (a == "--length")
         options.length = number(value());
+      else if (a == "--clearance")
+        options.clearance = number(value());
       else if (a == "--feed")
         options.feed = number(value());
       else if (a == "--face") {
@@ -64,12 +68,15 @@ int run(std::vector<std::string> args) {
           throw std::runtime_error("Normal sign must be +1 or -1");
         options.normalSign = int(n);
       } else if (a == "--help") {
-        std::cout << "MillingAnalyzer (no arguments): interactive STEP import UI.\nMillingAnalyzer --serve [--no-open]\nMillingAnalyzer [file.STEP | file.bpatch | --demo | "
-                     "--bowl] --output NEW_DIRECTORY [--face ID] [--spacing "
-                     "mm] [--step mm] [--chord mm] [--angle deg] [--diameter "
-                     "mm] [--length mm] [--feed mm/s] [--normal-sign 1|-1] "
-                     "[--open]\nOffline only. Result: preview.html and "
-                     "scene.json; pose CSV export in viewer.\n";
+        std::cout
+            << "MillingAnalyzer (no arguments): interactive STEP import "
+               "UI.\nMillingAnalyzer --serve [--no-open]\nMillingAnalyzer "
+               "[file.STEP | file.bpatch | --demo | "
+               "--bowl] --output NEW_DIRECTORY [--face ID] [--spacing "
+               "mm] [--step mm] [--chord mm] [--angle deg] [--diameter "
+               "mm] [--length mm] [--feed mm/s] [--normal-sign 1|-1] "
+               "[--open]\nOffline only. Result: preview.html and "
+               "scene.json; pose CSV export in viewer.\n";
         return 0;
       } else if (a.rfind("--", 0) == 0)
         throw std::runtime_error("Unknown option: " + a);
@@ -112,6 +119,23 @@ int run(std::vector<std::string> args) {
     };
     write("scene.json", data);
     write("preview.html", html);
+    for (const auto &f : scene.faces) {
+      if (f.trajectory.poses.empty())
+        continue;
+      std::ostringstream csv;
+      csv << std::setprecision(15)
+          << "face_id,pass_id,sample_id,part_x_mm,part_y_mm,part_z_mm,qw,qx,qy,"
+             "qz,nx,ny,nz,time_s,collision,sweep_collision,motion\n";
+      size_t k = 0;
+      for (const auto &p : f.trajectory.poses)
+        csv << f.id << ",0," << k++ << ',' << p.p.x() << ',' << p.p.y() << ','
+            << p.p.z() << ',' << p.q.w() << ',' << p.q.x() << ',' << p.q.y()
+            << ',' << p.q.z() << ',' << p.n.x() << ',' << p.n.y() << ','
+            << p.n.z() << ',' << p.t << ',' << p.collision << ','
+            << p.sweepCollision << ',' << p.motion << '\n';
+      write(("face-" + std::to_string(f.id) + ".poses.csv").c_str(), csv.str());
+    }
+
     size_t passes = 0, poses = 0;
     for (auto &f : scene.faces) {
       passes += f.passes.size();
