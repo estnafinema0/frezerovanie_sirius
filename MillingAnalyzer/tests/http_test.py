@@ -37,6 +37,8 @@ with tempfile.TemporaryDirectory() as tmp:
             request('/calculate', status=403, origin='https://example.com')
             mesh = request('/load?format=step', path.read_bytes())
             assert len(mesh['faces']) == 6 and all(not f['passes'] for f in mesh['faces'])
+            step_job = request('/program?xmin=-2&ymin=-2&zmin=0&xmax=22&ymax=12&zmax=7&plunge=1')
+            assert step_job['program']['includedFaces'] and not step_job['program']['collisions']
             first = request('/calculate?face=1')
             assert first['faces'][0]['passes']
             request('/load?format=step', b'invalid STEP', status=400)
@@ -53,7 +55,22 @@ with tempfile.TemporaryDirectory() as tmp:
             assert trajectory and all(p['motion'] != 2 for p in trajectory[1:])
             assert not any(p['collision'] or p['sweepCollision'] for p in trajectory)
             assert all(b['t'] > a['t'] for a, b in zip(trajectory, trajectory[1:]))
-            print('HTTP import, selection, calculation, rejection and model preservation: passed')
+            request('/program', status=400)
+            program = request('/program-demo')
+            job = program['program']
+            assert len(job['operations']) == 8 and len(job['includedFaces']) == 2
+            assert job['robotReady'] is False and not job['collisions']
+            assert job['stock']['removed_mm3'] > 0 and job['stock']['finishRemoved_mm3'] > 0
+            params = '?xmin=-2&ymin=-2&zmin=0&xmax=22&ymax=22&zmax=6'
+            request('/program'+params, status=400)  # unconfirmed entry
+            request('/program'+params+'&plunge=1&depth=nan', status=400)
+            request('/program'+params+'&plunge=1&mode=garbage', status=400)
+            again = request('/program'+params+'&plunge=1')
+            assert again == program, 'Invalid program settings preserve loaded solid'
+            rough = request('/program'+params+'&plunge=1&mode=rough')
+            assert all(op['stage'] == 1 for op in rough['program']['operations'])
+            assert rough['program']['stock']['finishRemoved_mm3'] == 0
+            print('HTTP STEP, finishing, rough/full program, input rejection and preservation: passed')
         finally:
             proc.terminate()
             proc.wait(timeout=10)

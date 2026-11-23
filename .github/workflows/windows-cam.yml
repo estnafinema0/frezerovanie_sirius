@@ -64,6 +64,8 @@ jobs:
         run: ctest --test-dir build-bezier-viewer -C Release --output-on-failure
       - name: Create interactive Bezier preview
         run: ./build-bezier-viewer/Release/MillingAnalyzer.exe --demo --output build-bezier-viewer/demo
+      - name: Create roughing and finishing program from reference STEP
+        run: ./build-bezier-viewer/Release/MillingAnalyzer.exe MillingAnalyzer/data/stepped-solid.step --program --stock -2 -2 0 22 22 6 --confirm-centre-cutting --output build-bezier-viewer/program-demo
       - name: Build isolated virtual pose and force adapter
         run: |
           cmake -S experiments/robotstudio_pose_force -B build-virtual -G "Visual Studio 17 2022" -A x64 -DEIGEN_INCLUDE_DIR="$pwd/build-bezier-viewer-deps/eigen"
@@ -79,6 +81,9 @@ jobs:
             build-bezier-viewer/Release/*.dll
             build-bezier-viewer/Release/licenses/
             build-bezier-viewer/demo/
+            build-bezier-viewer/program-demo/
+            MillingAnalyzer/data/stepped-solid.step
+            docs/17-roughing-finishing-program.md
             build-virtual/Release/MillingVirtualEgm.exe
             experiments/robotstudio_pose_force/*.mod
             experiments/robotstudio_pose_force/README.md

@@ -9,6 +9,7 @@
 #include "server.h"
 #include "geometry.h"
 #include "httplib.h"
+#include "program.h"
 #include "viewer_resource.h"
 #include <Standard_Failure.hxx>
 #include <fstream>
@@ -109,6 +110,7 @@ int serve(bool openBrowser) {
       try {
         milling::Scene result;
         auto nextModel = model;
+        std::string data;
         if (r.path == root + "/load") {
           auto format = r.get_param_value("format");
           if (format != "step" && format != "bpatch")
@@ -139,12 +141,57 @@ int serve(bool openBrowser) {
           o.previewOnly = true;
           result = milling::analyze(candidate, o);
           nextModel = std::move(candidate);
+        } else if (r.path == root + "/program" ||
+                   r.path == root + "/program-demo") {
+          bool demoProgram = r.path == root + "/program-demo";
+          if (demoProgram)
+            nextModel = milling::programDemo();
+          auto o = options(r);
+          milling::ProgramSettings cfg;
+          if (r.get_param_value("mode") == "rough")
+            cfg.mode = milling::ProgramSettings::Rough;
+          else if (!r.get_param_value("mode").empty() &&
+                   r.get_param_value("mode") != "both")
+            throw std::runtime_error("Program mode must be rough or both");
+          const char *names[] = {"xmin", "ymin", "zmin",
+                                 "xmax", "ymax", "zmax"};
+          for (int k = 0; k < 6; ++k) {
+            if (!demoProgram && !r.has_param(names[k]))
+              throw std::runtime_error("Enter all six stock bounds explicitly");
+            double &v = k < 3 ? cfg.stock.low[k] : cfg.stock.high[k - 3];
+            v = parameter(r, names[k], v);
+          }
+          cfg.stock.cell = parameter(r, "cell", .5);
+          cfg.stock.stepDown = parameter(r, "depth", 1);
+          cfg.stock.stepOver = parameter(r, "roughSpacing", 1);
+          cfg.stock.allowance = parameter(r, "allowance", .3);
+          cfg.stock.roughFeed = parameter(r, "roughFeed", 10);
+          cfg.stock.plungeConfirmed =
+              demoProgram || r.get_param_value("plunge") == "1";
+          auto faces = r.get_param_value("finishFaces");
+          if (!faces.empty() && faces != "auto") {
+            std::istringstream list(faces);
+            std::string item;
+            while (std::getline(list, item, ',')) {
+              size_t n = 0;
+              int id = std::stoi(item, &n);
+              if (n != item.size() || id < 1 || id > 1000)
+                throw std::runtime_error("Invalid finish face list");
+              cfg.finishFaces.push_back(id);
+            }
+          }
+          auto preview = o;
+          preview.previewOnly = true;
+          result = milling::analyze(nextModel, preview);
+          auto program = milling::planProgram(nextModel, result, o, cfg);
+          data = milling::programJson(result, program);
         } else if (r.path == root + "/demo") {
           nextModel = milling::demo(r.get_param_value("kind") == "bowl");
           result = milling::analyze(nextModel, milling::Options{});
         } else
           result = milling::analyze(model, options(r));
-        auto data = milling::json(result);
+        if (data.empty())
+          data = milling::json(result);
         model = std::move(nextModel);
         initial = data;
         res.set_header("Cache-Control", "no-store");
@@ -162,6 +209,8 @@ int serve(bool openBrowser) {
     server.Post(root + "/load", api);
     server.Post(root + "/calculate", api);
     server.Post(root + "/demo", api);
+    server.Post(root + "/program", api);
+    server.Post(root + "/program-demo", api);
     std::string url = origin + root + "/";
     std::cout << "Milling Analyzer local UI: " << url
               << "\nKeep this console open. Ctrl+C stops the viewer service. "
