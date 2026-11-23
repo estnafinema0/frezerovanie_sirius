@@ -1,0 +1,15 @@
+﻿<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<ProductSettings version="1.0">
+  <Products>
+    <Product name="RobotWare" version="6.08.1040" id="abb.robotics.robotware">
+      <Settings>
+        <Setting id="abb.robotics.robotware.base" displayName="" robot="1" />
+        <Setting id="abb.robotics.robotware.languages.english" displayName="" robot="1" />
+        <Setting id="abb.robotics.robotware.options.pcinterface" displayName="616-1 PC Interface" robot="1" />
+        <Setting id="abb.robotics.robotware.options.externallyguidedmotion" displayName="689-1 EGM" robot="1" />
+        <Setting id="abb.robotics.robotware.drivesystems.drive.dc430a2.du430a2.dm430a" displayName="Drive System" robot="1" />
+        <Setting id="abb.robotics.robotware.robots.irb1600.10-1_45" displayName="IRB 1600-10/1.45" robot="1" />
+      </Settings>
+    </Product>
+  </Products>
+</ProductSettings>
