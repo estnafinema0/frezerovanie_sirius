@@ -3,3 +3,7 @@
 VisualStudio/FrezaEgm/out/
 VisualStudio/FrezaEgm/build*/
 /build-bezier*/
+/.venv-step-analysis/
+/step-report.json
+
+__pycache__/
