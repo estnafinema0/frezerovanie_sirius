@@ -224,24 +224,27 @@ MachiningProgram planProgram(const Model &m, Scene &scene, const Options &o,
     std::vector<TopoDS_Face> cadFaces;
     for (TopExp_Explorer e(m.shape, TopAbs_FACE); e.More(); e.Next())
       cadFaces.push_back(TopoDS::Face(e.Current()));
-    std::vector<int> chosen = cfg.finishFaces;
-    if (chosen.empty()) {
-      for (const auto &f : scene.faces) {
-        bool has = false, up = true;
-        for (const auto &t : scene.mesh)
-          if (t.face == f.id) {
-            V n = (t.b - t.a).cross(t.c - t.a);
-            if (n.norm() > 1e-12) {
-              has = true;
-              up &= n.normalized().z() > .2;
-            }
+    auto upward = [&](int id) {
+      bool has = false;
+      for (const auto &t : scene.mesh)
+        if (t.face == id) {
+          V n = (t.b - t.a).cross(t.c - t.a);
+          if (n.norm() > 1e-12) {
+            has = true;
+            if (n.normalized().z() <= .2)
+              return false;
           }
-        if (has && up)
+        }
+      return has;
+    };
+    std::vector<int> chosen = cfg.finishFaces;
+    if (chosen.empty())
+      for (const auto &f : scene.faces)
+        if (upward(f.id))
           chosen.push_back(f.id);
-        else
-          out.excludedFaces.push_back(f.id);
-      }
-    }
+    for (const auto &f : scene.faces)
+      if (std::find(chosen.begin(), chosen.end(), f.id) == chosen.end())
+        out.excludedFaces.push_back(f.id);
     need(!chosen.empty(), "No upward finishing faces in this setup");
     std::sort(chosen.begin(), chosen.end());
     need(std::adjacent_find(chosen.begin(), chosen.end()) == chosen.end(),
@@ -249,6 +252,7 @@ MachiningProgram planProgram(const Model &m, Scene &scene, const Options &o,
     for (int id : chosen) {
       need(id >= 1 && id <= int(scene.faces.size()),
            "Invalid finishing face ID");
+      need(upward(id), "Selected finishing face is not upward in this setup");
       Options one = o;
       one.face = id;
       auto calculated = analyze(m, one);

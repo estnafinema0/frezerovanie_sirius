@@ -144,6 +144,16 @@ int main(int argc, char **argv) {
     bad.finishFaces = {1, 1};
     rejects([&] { planProgram(model, scene, o, bad); },
             "duplicate face rejected");
+    bad = cfg;
+    bad.finishFaces = {job.excludedFaces.front()};
+    rejects([&] { planProgram(model, scene, o, bad); },
+            "explicit side/bottom face rejected in top setup");
+    bad = cfg;
+    bad.finishFaces = {job.includedFaces.front()};
+    auto subset = planProgram(model, scene, o, bad);
+    check(subset.includedFaces.size() == 1 &&
+              subset.excludedFaces.size() + 1 == scene.faces.size(),
+          "explicit subset reports every excluded face");
     auto open = demo();
     auto openScene = analyze(open, preview);
     rejects([&] { planProgram(open, openScene, o, cfg); },
