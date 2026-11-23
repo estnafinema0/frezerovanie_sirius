@@ -3,6 +3,7 @@
 VisualStudio/FrezaEgm/out/
 VisualStudio/FrezaEgm/build*/
 /build-bezier*/
+/build-virtual/
 /.venv-step-analysis/
 /step-report.json
 

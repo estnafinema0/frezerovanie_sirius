@@ -34,3 +34,51 @@ jobs:
         run: ./build/tests/Release/FrezaEgm_cam_cli.exe VisualStudio/FrezaEgm/data/cam/Primer1.STL build/Primer1-base.csv mm 1 4 0.5 750 0 599.5
       - name: Analytic Bezier reference (independent of OpenCAMLib)
         run: ./build/tests/Release/FrezaEgm_bezier_cli.exe VisualStudio/FrezaEgm/data/bezier/plate.bpatch build/bezier-plate.csv 4 0.1 750 0 599.5 2
+  analyzer:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/cache@v4
+        id: cad-cache
+        with:
+          path: |
+            build-bezier-viewer-deps/occt
+            build-bezier-viewer-deps/eigen
+          key: occt-7.9.3-eigen-3.4.0-msvc-x64-v1
+      - name: Build pinned OCCT and Eigen
+        run: cmake -P MillingAnalyzer/cmake/Dependencies.cmake
+      - uses: actions/cache/save@v4
+        if: steps.cad-cache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            build-bezier-viewer-deps/occt
+            build-bezier-viewer-deps/eigen
+          key: occt-7.9.3-eigen-3.4.0-msvc-x64-v1
+      - name: Configure independent geometry viewer
+        run: cmake -S MillingAnalyzer -B build-bezier-viewer -G "Visual Studio 17 2022" -A x64 -DCMAKE_PREFIX_PATH="$pwd/build-bezier-viewer-deps/occt" -DEIGEN_INCLUDE_DIR="$pwd/build-bezier-viewer-deps/eigen"
+      - name: Build geometry application
+        run: cmake --build build-bezier-viewer --config Release --parallel 4
+      - name: Geometry, quaternion, trim, collision and protected ABB tests
+        run: ctest --test-dir build-bezier-viewer -C Release --output-on-failure
+      - name: Create interactive Bezier preview
+        run: ./build-bezier-viewer/Release/MillingAnalyzer.exe --demo --output build-bezier-viewer/demo
+      - name: Build isolated virtual pose and force adapter
+        run: |
+          cmake -S experiments/robotstudio_pose_force -B build-virtual -G "Visual Studio 17 2022" -A x64 -DEIGEN_INCLUDE_DIR="$pwd/build-bezier-viewer-deps/eigen"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cmake --build build-virtual --config Release --parallel 4
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          ctest --test-dir build-virtual -C Release --output-on-failure
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MillingAnalyzer-Windows-x64
+          path: |
+            build-bezier-viewer/Release/*.exe
+            build-bezier-viewer/Release/*.dll
+            build-bezier-viewer/Release/licenses/
+            build-bezier-viewer/demo/
+            build-virtual/Release/MillingVirtualEgm.exe
+            experiments/robotstudio_pose_force/*.mod
+            experiments/robotstudio_pose_force/README.md

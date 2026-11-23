@@ -1,0 +1,4 @@
+#pragma once
+// Byte array avoids MSVC's per-string-literal length limit, preserving UTF-8.
+inline const unsigned char viewerBytes[] = {@VIEWER_BYTES@0};
+inline const char *viewerTemplate = reinterpret_cast<const char *>(viewerBytes);
