@@ -37,6 +37,14 @@ with tempfile.TemporaryDirectory() as tmp:
             request('/calculate', status=403, origin='https://example.com')
             mesh = request('/load?format=step', path.read_bytes())
             assert len(mesh['faces']) == 6 and all(not f['passes'] for f in mesh['faces'])
+            step_job = request('/program?xmin=-2&ymin=-2&zmin=0&xmax=22&ymax=12&zmax=7&plunge=1')
+            assert step_job['program']['includedFaces'] and not step_job['program']['collisions']
+            auto = request('/auto-program?xmin=-2&ymin=-2&zmin=0&xmax=22&ymax=12&zmax=7&plunge=1&face=999&finishFaces=999')
+            assert auto['program']['wholeModel'] is True
+            assert len(auto['program']['includedFaces']) == 5
+            assert len(auto['program']['excludedReasons']) == 1
+            assert not auto['program']['collisions'] and not auto['program']['stockCollisions']
+            assert auto['program']['stage'] == sorted(auto['program']['stage'])
             first = request('/calculate?face=1')
             assert first['faces'][0]['passes']
             request('/load?format=step', b'invalid STEP', status=400)
@@ -53,7 +61,37 @@ with tempfile.TemporaryDirectory() as tmp:
             assert trajectory and all(p['motion'] != 2 for p in trajectory[1:])
             assert not any(p['collision'] or p['sweepCollision'] for p in trajectory)
             assert all(b['t'] > a['t'] for a, b in zip(trajectory, trajectory[1:]))
-            print('HTTP import, selection, calculation, rejection and model preservation: passed')
+            request('/program', status=400)
+            program = request('/program-demo')
+            job = program['program']
+            assert len(job['operations']) == 8 and len(job['includedFaces']) == 2
+            assert job['robotReady'] is False and not job['collisions']
+            assert job['stock']['removed_mm3'] > 0 and job['stock']['finishRemoved_mm3'] > 0
+            params = '?xmin=-2&ymin=-2&zmin=0&xmax=22&ymax=22&zmax=6'
+            request('/program'+params, status=400)  # unconfirmed entry
+            request('/program'+params+'&plunge=1&depth=nan', status=400)
+            request('/program'+params+'&plunge=1&mode=garbage', status=400)
+            again = request('/program'+params+'&plunge=1')
+            assert again == program, 'Invalid program settings preserve loaded solid'
+            rough = request('/program'+params+'&plunge=1&mode=rough')
+            assert all(op['stage'] == 1 for op in rough['program']['operations'])
+            assert rough['program']['stock']['finishRemoved_mm3'] == 0
+            # Replace a calculated demo with an unrelated STEP, then a second
+            # imported solid. No filename whitelist or retained demo geometry.
+            mesh = request('/load?format=step', path.read_bytes())
+            assert 'program' not in mesh and len(mesh['faces']) == 6
+            box_job = request('/program?xmin=-2&ymin=-2&zmin=0&xmax=22&ymax=12&zmax=7&plunge=1')
+            assert box_job['program']['stock']['max'] == [22, 12, 7]
+            custom = pathlib.Path(tmp) / 'Деталь с пробелами.STP'
+            custom.write_bytes((pathlib.Path(__file__).parents[1] / 'data' / 'stepped-solid.step').read_bytes())
+            mesh = request('/load?format=step', custom.read_bytes())
+            assert 'program' not in mesh and len(mesh['faces']) == 11
+            loaded_job = request('/program'+params+'&plunge=1')
+            assert loaded_job['program'] == program['program'], 'Imported STEP matches the corresponding solid, not the previous box'
+            request('/load?format=step', b'', status=400)
+            preserved = request('/program'+params+'&plunge=1')
+            assert preserved == loaded_job
+            print('HTTP uploaded STEP replacement, finishing, rough/full program, rejection and preservation: passed')
         finally:
             proc.terminate()
             proc.wait(timeout=10)

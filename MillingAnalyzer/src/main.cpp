@@ -7,6 +7,7 @@
 #endif
 // clang-format on
 #include "geometry.h"
+#include "program.h"
 #include "server.h"
 #include "viewer_resource.h"
 #include <Standard_Failure.hxx>
@@ -21,7 +22,10 @@ int run(std::vector<std::string> args) {
     return serve(args.size() < 3 || args[2] != "--no-open");
   try {
     milling::Options options;
-    bool demo = false, bowl = false, open = false;
+    bool demo = false, bowl = false, open = false, program = false,
+         stockDemo = false;
+    milling::ProgramSettings job;
+    bool stockExplicit = false;
     std::filesystem::path input, output = "milling-preview";
     auto number = [](const std::string &s) {
       size_t pos = 0;
@@ -37,7 +41,38 @@ int run(std::vector<std::string> args) {
           throw std::runtime_error("Missing argument");
         return args[i];
       };
-      if (a == "--demo")
+      if (a == "--program-demo") {
+        stockDemo = true;
+        program = true;
+        job.stock.plungeConfirmed = true;
+        stockExplicit = true;
+      } else if (a == "--auto-program") {
+        program = true;
+        job.wholeModel = true;
+      } else if (a == "--program")
+        program = true;
+      else if (a == "--rough-only") {
+        program = true;
+        job.mode = milling::ProgramSettings::Rough;
+      } else if (a == "--stock") {
+        for (int k = 0; k < 3; ++k)
+          job.stock.low[k] = number(value());
+        for (int k = 0; k < 3; ++k)
+          job.stock.high[k] = number(value());
+        stockExplicit = true;
+      } else if (a == "--step-down")
+        job.stock.stepDown = number(value());
+      else if (a == "--rough-spacing")
+        job.stock.stepOver = number(value());
+      else if (a == "--allowance")
+        job.stock.allowance = number(value());
+      else if (a == "--stock-cell")
+        job.stock.cell = number(value());
+      else if (a == "--rough-feed")
+        job.stock.roughFeed = number(value());
+      else if (a == "--confirm-centre-cutting")
+        job.stock.plungeConfirmed = true;
+      else if (a == "--demo")
         demo = true;
       else if (a == "--bowl") {
         demo = true;
@@ -74,7 +109,13 @@ int run(std::vector<std::string> args) {
         options.normalSign = int(n);
       } else if (a == "--help") {
         std::cout
-            << "MillingAnalyzer (no arguments): interactive STEP import "
+            << "Program: file.STEP --auto-program --stock xmin ymin zmin xmax "
+               "ymax "
+               "zmax "
+               "--confirm-centre-cutting [--step-down mm] [--rough-spacing mm] "
+               "[--allowance mm] [--stock-cell mm] [--rough-only]. "
+               "Synthetic solid: --program-demo.\n"
+               "MillingAnalyzer (no arguments): interactive STEP import "
                "UI.\nMillingAnalyzer --serve [--no-open]\nMillingAnalyzer "
                "[file.STEP | file.bpatch | --demo | "
                "--bowl] --output NEW_DIRECTORY [--face ID] [--spacing "
@@ -91,21 +132,44 @@ int run(std::vector<std::string> args) {
         input = std::filesystem::u8path(a);
       }
     }
-    if (demo && !input.empty())
+    if ((demo || stockDemo) && !input.empty())
       throw std::runtime_error("Choose either STEP or demo");
-    if (!demo && input.empty())
+    if (!demo && !stockDemo && input.empty())
       throw std::runtime_error("Select STEP or --demo");
+    if (job.wholeModel) {
+      options.face = 0;
+      options.normalSign = 1;
+    }
     options.validate();
     if (std::filesystem::exists(output))
       throw std::runtime_error(
           "Output directory exists; choose a new --output directory");
     std::cout << "Reading geometry and calculating poses (offline)...\n";
     auto model =
-        demo ? milling::demo(bowl)
-             : (input.extension() == ".bpatch" ? milling::loadPatch(input)
-                                               : milling::loadStep(input));
-    auto scene = milling::analyze(model, options);
-    auto data = milling::json(scene);
+        stockDemo ? milling::programDemo()
+        : demo    ? milling::demo(bowl)
+                  : (input.extension() == ".bpatch" ? milling::loadPatch(input)
+                                                    : milling::loadStep(input));
+    auto viewOptions = options;
+    if (program)
+      viewOptions.previewOnly = true;
+    auto scene = milling::analyze(model, viewOptions);
+    std::string programCsv;
+    std::string data;
+    if (program) {
+      if (!stockExplicit)
+        throw std::runtime_error("Program requires explicit --stock bounds");
+      if (options.face)
+        job.finishFaces.push_back(options.face);
+      auto result = milling::planProgram(model, scene, options, job);
+      data = milling::programJson(scene, result);
+      programCsv = milling::programCsv(result);
+      std::cout << "Program operations=" << result.operations.size()
+                << ", poses=" << result.trajectory.poses.size()
+                << ", rough removed estimate=" << result.removed
+                << " mm3; collisions=" << result.collisions << '\n';
+    } else
+      data = milling::json(scene);
     std::string html = viewerTemplate;
     auto mark = html.find("@@SCENE@@");
     if (mark == std::string::npos)
@@ -124,6 +188,8 @@ int run(std::vector<std::string> args) {
     };
     write("scene.json", data);
     write("preview.html", html);
+    if (!programCsv.empty())
+      write("program.poses.csv", programCsv);
     for (const auto &f : scene.faces) {
       if (f.trajectory.poses.empty())
         continue;
