@@ -1,3 +1,11 @@
+// Windows API must precede OCCT: Standard_Macro.hxx defines NOUSER/NOKERNEL.
+// clang-format off
+#ifdef _WIN32
+#include <winsock2.h>
+#include <windows.h>
+#include <shellapi.h>
+#endif
+// clang-format on
 #include "server.h"
 #include "geometry.h"
 #include "httplib.h"
@@ -8,10 +16,7 @@
 #include <iostream>
 #include <mutex>
 #include <random>
-#ifdef _WIN32
-#include <shellapi.h>
-#include <windows.h>
-#endif
+
 namespace {
 std::string errorJson(const std::string &text) {
   std::string out = "{\"error\":\"";

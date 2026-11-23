@@ -1,3 +1,11 @@
+// Windows API must precede OCCT: Standard_Macro.hxx defines NOUSER/NOKERNEL.
+// clang-format off
+#ifdef _WIN32
+#include <winsock2.h>
+#include <windows.h>
+#include <shellapi.h>
+#endif
+// clang-format on
 #include "geometry.h"
 #include "server.h"
 #include "viewer_resource.h"
@@ -7,10 +15,7 @@
 #include <iostream>
 #include <locale>
 #include <sstream>
-#ifdef _WIN32
-#include <shellapi.h>
-#include <windows.h>
-#endif
+
 int run(std::vector<std::string> args) {
   if (args.size() == 1 || (args.size() >= 2 && args[1] == "--serve"))
     return serve(args.size() < 3 || args[2] != "--no-open");
