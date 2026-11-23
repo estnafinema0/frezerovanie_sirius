@@ -65,7 +65,14 @@ def trial(path, stale=False):
                 robot.sendto(message(1, header) + message(2, message(2, cart)), ('127.0.0.1', 6512))
                 readable, _, _ = select.select([robot, force], [], [], .004)
                 for sock in readable:
-                    data, _ = sock.recvfrom(4096)
+                    try:
+                        data, _ = sock.recvfrom(4096)
+                    except ConnectionResetError:
+                        # Windows reports ICMP port-unreachable after the adapter
+                        # intentionally exits. Still verify exit code/reason below.
+                        assert stale or done, 'Unexpected UDP reset before completion'
+                        proc.wait(timeout=5)
+                        continue
                     if sock is force:
                         done |= data.startswith(b'DONE,')
                     else:
