@@ -41,6 +41,7 @@ jobs:
         with:
           fetch-depth: 0
       - uses: actions/cache@v4
+        id: cad-cache
         with:
           path: |
             build-bezier-viewer-deps/occt
@@ -48,6 +49,13 @@ jobs:
           key: occt-7.9.3-eigen-3.4.0-msvc-x64-v1
       - name: Build pinned OCCT and Eigen
         run: cmake -P MillingAnalyzer/cmake/Dependencies.cmake
+      - uses: actions/cache/save@v4
+        if: steps.cad-cache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            build-bezier-viewer-deps/occt
+            build-bezier-viewer-deps/eigen
+          key: occt-7.9.3-eigen-3.4.0-msvc-x64-v1
       - name: Configure independent geometry viewer
         run: cmake -S MillingAnalyzer -B build-bezier-viewer -G "Visual Studio 17 2022" -A x64 -DCMAKE_PREFIX_PATH="$pwd/build-bezier-viewer-deps/occt" -DEIGEN_INCLUDE_DIR="$pwd/build-bezier-viewer-deps/eigen"
       - name: Build geometry application

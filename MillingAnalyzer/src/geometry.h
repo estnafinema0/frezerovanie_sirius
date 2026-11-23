@@ -9,6 +9,7 @@ namespace milling {
 using V = Eigen::Vector3d;
 using Q = Eigen::Quaterniond;
 struct Options {
+  bool previewOnly = false;
   double spacing = 2, step = 1, chord = .02, angleDeg = 5, diameter = 2.5,
          length = 20, feed = 10;
   int normalSign = 1,

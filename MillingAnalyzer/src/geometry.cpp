@@ -415,8 +415,10 @@ Scene analyze(const Model &model, const Options &o) {
           face.weights.push_back(b->Weight(u, v));
         }
     }
-    if ((o.face && o.face != face.id) || (!o.face && faces.size() > 32)) {
-      face.error = "Not calculated: select this face using --face ID";
+    if (o.previewOnly || (o.face && o.face != face.id) ||
+        (!o.face && faces.size() > 32)) {
+      face.error =
+          "Not calculated: select this face and Calculate (CLI: --face ID)";
       scene.faces.push_back(face);
       continue;
     }

@@ -17,8 +17,14 @@ void check(bool b, const char *why) {
   if (!b)
     throw std::runtime_error(why);
 }
-int main() {
+int main(int argc, char **argv) {
   try {
+    if (argc == 3 && std::string(argv[1]) == "--fixture") {
+      STEPControl_Writer writer;
+      check(writer.Transfer(BRepPrimAPI_MakeBox(20, 10, 5).Shape(), STEPControl_AsIs) == IFSelect_RetDone, "fixture transfer");
+      check(writer.Write(argv[2]) == IFSelect_RetDone, "fixture write");
+      return 0;
+    }
     Options o;
     o.validate();
     int n = 0;
@@ -150,6 +156,10 @@ int main() {
     auto scene = analyze(d, o);
     check(!scene.faces[0].passes.empty(), "scene paths");
     check(!json(scene).empty(), "scene JSON");
+    check(scene.faces[0].passes[0].segmentCollision, "interpolated convex chord penetration detected");
+    Options preview; preview.previewOnly = true;
+    auto meshOnly = analyze(d, preview);
+    check(!meshOnly.mesh.empty() && meshOnly.faces[0].passes.empty(), "preview does not calculate toolpath");
     auto concave = analyze(demo(true), o);
     bool detected = false;
     for (auto &pass : concave.faces[0].passes)

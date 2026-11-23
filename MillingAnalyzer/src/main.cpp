@@ -1,48 +1,21 @@
 #include "geometry.h"
+#include "server.h"
 #include "viewer_resource.h"
 #include <Standard_Failure.hxx>
-#include <chrono>
 #include <fstream>
 #include <iostream>
 #include <locale>
 #ifdef _WIN32
-#define NOMINMAX
-#include <commdlg.h>
-#include <shellapi.h>
 #include <windows.h>
+#include <shellapi.h>
 #endif
 int run(std::vector<std::string> args) {
+  if (args.size() == 1 || (args.size() >= 2 && args[1] == "--serve"))
+    return serve(args.size() < 3 || args[2] != "--no-open");
   try {
     milling::Options options;
     bool demo = false, bowl = false, open = false;
     std::filesystem::path input, output = "milling-preview";
-    if (args.size() == 1)
-      output = "milling-preview-" +
-               std::to_string(
-                   std::chrono::duration_cast<std::chrono::milliseconds>(
-                       std::chrono::system_clock::now().time_since_epoch())
-                       .count());
-#ifdef _WIN32
-    if (args.size() == 1) {
-      wchar_t path[32768] = {};
-      OPENFILENAMEW dialog{};
-      dialog.lStructSize = sizeof(dialog);
-      dialog.lpstrFilter = L"CAD / Bezier\0*.step;*.stp;*.bpatch\0\0";
-      dialog.lpstrFile = path;
-      dialog.nMaxFile = 32768;
-      dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
-      dialog.lpstrTitle =
-          L"Milling Analyzer: select STEP (Cancel = Bezier demo)";
-      if (GetOpenFileNameW(&dialog))
-        input = path;
-      else
-        demo = true;
-      open = true;
-    }
-#else
-    if (args.size() == 1)
-      demo = true;
-#endif
     auto number = [](const std::string &s) {
       size_t pos = 0;
       double v = std::stod(s, &pos);
@@ -91,7 +64,7 @@ int run(std::vector<std::string> args) {
           throw std::runtime_error("Normal sign must be +1 or -1");
         options.normalSign = int(n);
       } else if (a == "--help") {
-        std::cout << "MillingAnalyzer [file.STEP | file.bpatch | --demo | "
+        std::cout << "MillingAnalyzer (no arguments): interactive STEP import UI.\nMillingAnalyzer --serve [--no-open]\nMillingAnalyzer [file.STEP | file.bpatch | --demo | "
                      "--bowl] --output NEW_DIRECTORY [--face ID] [--spacing "
                      "mm] [--step mm] [--chord mm] [--angle deg] [--diameter "
                      "mm] [--length mm] [--feed mm/s] [--normal-sign 1|-1] "
@@ -126,6 +99,9 @@ int run(std::vector<std::string> args) {
     if (mark == std::string::npos)
       throw std::runtime_error("Viewer resource missing");
     html.replace(mark, 9, data);
+    auto apiMark = html.find("@@API@@");
+    if (apiMark != std::string::npos)
+      html.replace(apiMark, 7, "null");
     std::filesystem::create_directories(output);
     auto write = [&](const char *name, const std::string &text) {
       std::ofstream f(output / name, std::ios::binary);
