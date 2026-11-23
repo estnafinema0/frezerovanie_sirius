@@ -61,7 +61,8 @@ Q frame(const V &normal, const V &tangent, const Q *previous = nullptr);
 Pose evaluate(const TopoDS_Face &, double u, double v, const Options &);
 std::vector<std::pair<double, double>> intervals(const TopoDS_Face &, double v);
 std::vector<Pass> raster(const TopoDS_Face &, const Options &);
-Pass connectPasses(const std::vector<Pass> &, double modelTop, const Options &);
+Pass connectPasses(const std::vector<Pass> &, double modelTop, const Options &,
+                   const TopoDS_Face *surface = nullptr);
 bool triangleCollision(const Triangle &, const Pose &, double radius,
                        double length);
 Scene analyze(const Model &, const Options &);

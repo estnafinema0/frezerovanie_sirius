@@ -2,6 +2,7 @@
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepBndLib.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
+#include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepClass3d_SolidClassifier.hxx>
@@ -165,11 +166,22 @@ Model loadPatch(const std::filesystem::path &path) {
 Q frame(const V &normal, const V &tangent, const Q *previous) {
   require(normal.allFinite() && tangent.allFinite() && normal.norm() > 1e-10,
           "Degenerate tool frame");
-  V z = normal.normalized(), x = tangent - z * tangent.dot(z);
-  if (x.norm() < 1e-9 && previous) {
-    x = (*previous) * V::UnitX();
-    x -= z * x.dot(z);
+  V z = normal.normalized();
+  if (previous) {
+    require(previous->coeffs().allFinite() &&
+                std::abs(previous->norm() - 1) < 1e-8,
+            "Invalid previous tool frame");
+    V oldZ = *previous * V::UnitZ();
+    require(oldZ.dot(z) > -1 + 1e-8,
+            "Antipodal normals: minimum-rotation frame is ambiguous");
+    // Discrete parallel transport: tilt only, with no extra spin about tool Z.
+    // Feed direction initializes X once; reversing a raster never resets it.
+    Q q = (Q::FromTwoVectors(oldZ, z) * *previous).normalized();
+    if (q.dot(*previous) < 0)
+      q.coeffs() *= -1;
+    return q;
   }
+  V x = tangent - z * tangent.dot(z);
   if (x.norm() < 1e-9) {
     x = std::abs(z.x()) < .8 ? V::UnitX() : V::UnitY();
     x -= z * x.dot(z);
@@ -379,11 +391,25 @@ std::vector<Pass> raster(const TopoDS_Face &f, const Options &o) {
       require(result.size() <= 4000, "Pass budget exceeded");
     }
   }
+  // Keep the same transported frame across row reversals and clipped spans.
+  Q previous;
+  bool havePrevious = false;
+  for (auto &pass : result)
+    for (auto &p : pass.poses) {
+      p.q = frame(o.normalSign * p.n, p.q * V::UnitX(),
+                  havePrevious ? &previous : nullptr);
+      previous = p.q;
+      havePrevious = true;
+    }
   return result;
 }
 Pass connectPasses(const std::vector<Pass> &passes, double modelTop,
-                   const Options &o) {
+                   const Options &o, const TopoDS_Face *surface) {
+  o.validate();
   require(!passes.empty(), "No tool-centre passes fit this face");
+  require(std::isfinite(modelTop), "Invalid transfer height");
+  for (const auto &pass : passes)
+    require(pass.poses.size() >= 2, "Empty pass");
   Pass path;
   // Transfers are above the complete model. Even during SLERP, the entire
   // cylinder lies above it (bounding sphere radius from TCP).
@@ -404,6 +430,7 @@ Pass connectPasses(const std::vector<Pass> &passes, double modelTop,
       return;
     }
     Pose begin = path.poses.back();
+    end.q = frame(end.q * V::UnitZ(), end.q * V::UnitX(), &begin.q);
     double distance = (end.p - begin.p).norm();
     double rotation = begin.q.angularDistance(end.q);
     if (distance < 1e-10 && rotation < 1e-10)
@@ -428,15 +455,82 @@ Pass connectPasses(const std::vector<Pass> &passes, double modelTop,
       path.poses.push_back(p);
     }
   };
+  // Adjacent rows are joined on the actual surface, not by a 3D shortcut.
+  // Certify every output chord's clearance to all real trim edges with OCCT;
+  // holes / narrow necks / failed subdivision fall back to an elevated transfer.
+  std::vector<TopoDS_Shape> edges;
+  if (surface)
+    for (TopExp_Explorer edge(*surface, TopAbs_EDGE); edge.More(); edge.Next())
+      edges.push_back(edge.Current());
+  size_t linkWork = 0;
+  auto surfaceLink = [&](const Pose &a, const Pose &b) {
+    std::vector<Pose> link;
+    if (!surface || std::abs(a.v - b.v) < 1e-10 ||
+        (a.p - b.p).norm() > 2 * o.spacing + o.step)
+      return link;
+    auto at = [&](double t) {
+      return evaluate(*surface, a.u + t * (b.u - a.u),
+                      a.v + t * (b.v - a.v), o);
+    };
+    std::function<bool(double, double, const Pose &, const Pose &, int)> split;
+    split = [&](double ta, double tb, const Pose &pa, const Pose &pb, int depth) {
+      require(++linkWork <= 100000, "Surface link sampling budget exceeded");
+      bool fine = (pb.p - pa.p).norm() <= std::min(o.step, o.diameter / 4) &&
+                  angle(pa.n, pb.n) <= o.angleDeg * pi / 180;
+      Pose mid = at((ta + tb) / 2);
+      for (double f : {.25, .5, .75}) {
+        Pose p = at(ta + f * (tb - ta));
+        if (!inside(*surface, p.u, p.v))
+          return false;
+        fine &= (p.p - ((1 - f) * pa.p + f * pb.p)).norm() <=
+                    std::min(o.chord, .005) &&
+                angle(pa.n, p.n) <= o.angleDeg * pi / 180 &&
+                angle(p.n, pb.n) <= o.angleDeg * pi / 180;
+      }
+      if (!fine) {
+        if (depth >= 20)
+          return false;
+        return split(ta, (ta + tb) / 2, pa, mid, depth + 1) &&
+               split((ta + tb) / 2, tb, mid, pb, depth + 1);
+      }
+      if ((pb.p - pa.p).norm() < 1e-9)
+        return false;
+      auto chord = BRepBuilderAPI_MakeEdge(
+          gp_Pnt(pa.p.x(), pa.p.y(), pa.p.z()),
+          gp_Pnt(pb.p.x(), pb.p.y(), pb.p.z())).Shape();
+      for (const auto &edge : edges) {
+        require(++linkWork <= 100000, "Surface link clearance budget exceeded");
+        BRepExtrema_DistShapeShape distance(chord, edge);
+        if (!distance.IsDone() || distance.Value() < o.diameter / 2 + .005)
+          return false;
+      }
+      link.push_back(pb);
+      return true;
+    };
+    if (!split(0, 1, a, b, 0))
+      link.clear();
+    return link;
+  };
   append(lifted(passes.front().poses.front()), 2);
-  for (const auto &pass : passes) {
+  append(passes.front().poses.front(), 3);
+  for (size_t i = 0; i < passes.size(); ++i) {
+    const auto &pass = passes[i];
     require(pass.poses.size() >= 2, "Empty pass");
-    append(lifted(pass.poses.front()), 2);
-    append(pass.poses.front(), 3);
+    if (i) {
+      auto link = surfaceLink(passes[i - 1].poses.back(), pass.poses.front());
+      if (link.empty()) {
+        append(lifted(passes[i - 1].poses.back()), 1);
+        append(lifted(pass.poses.front()), 2);
+        append(pass.poses.front(), 3);
+      } else {
+        for (const auto &p : link)
+          append(p, 0);
+      }
+    }
     for (size_t k = 1; k < pass.poses.size(); ++k)
       append(pass.poses[k], 0);
-    append(lifted(pass.poses.back()), 1);
   }
+  append(lifted(passes.back().poses.back()), 1);
   return path;
 }
 bool triangleCollision(const Triangle &tri, const Pose &pose, double radius,
@@ -576,7 +670,7 @@ Scene analyze(const Model &model, const Options &o) {
         return false;
       };
       try {
-        face.trajectory = connectPasses(face.passes, z1, o);
+        face.trajectory = connectPasses(face.passes, z1, o, &faces[i]);
       } catch (const std::exception &e) {
         face.connectionError = e.what();
       }

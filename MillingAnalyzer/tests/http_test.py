@@ -49,6 +49,10 @@ with tempfile.TemporaryDirectory() as tmp:
             demo = request('/demo')
             assert demo['faces'][0]['type'] == 'Bezier'
             assert demo['faces'][0]['passes']
+            trajectory = demo['faces'][0]['trajectory']['poses']
+            assert trajectory and all(p['motion'] != 2 for p in trajectory[1:])
+            assert not any(p['collision'] or p['sweepCollision'] for p in trajectory)
+            assert all(b['t'] > a['t'] for a, b in zip(trajectory, trajectory[1:]))
             print('HTTP import, selection, calculation, rejection and model preservation: passed')
         finally:
             proc.terminate()

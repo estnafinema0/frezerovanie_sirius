@@ -38,7 +38,27 @@ int main(int argc, char **argv) {
             "right handed");
       auto next = frame(normal, V::Zero(), &q);
       check(q.dot(next) > .999, "fallback continuity");
+      auto reversedFeed = frame(normal, -(q * V::UnitX()), &q);
+      check(q.angularDistance(reversedFeed) < 1e-10,
+            "feed reversal must not spin tool about its axis");
       ++n;
+    }
+    {
+      Q q = Q::Identity();
+      for (int k = 0; k <= 200; ++k) {
+        V normal = V(.3 * std::sin(k * .03), .2 * std::cos(k * .03), 1).normalized();
+        Q next = frame(normal, V(k % 2 ? -1 : 1, 0, 0), &q);
+        Q delta = next * q.conjugate();
+        check(std::abs(delta.vec().dot(q * V::UnitZ())) < 1e-10,
+              "transport angular increment has no tool-axis spin");
+        check((next * V::UnitZ() - normal).norm() < 1e-10,
+              "transport tracks curved normal");
+        q = next;
+      }
+      bool rejected = false;
+      try { frame(-(q * V::UnitZ()), V::UnitX(), &q); }
+      catch (...) { rejected = true; }
+      check(rejected, "ambiguous antipodal normal rejected");
     }
     auto d = demo();
     auto face = TopoDS::Face(TopExp_Explorer(d.shape, TopAbs_FACE).Current());
@@ -69,6 +89,26 @@ int main(int argc, char **argv) {
     outer.Add(gp_Pnt(20, 20, 0));
     outer.Add(gp_Pnt(0, 20, 0));
     outer.Close();
+    auto plane = BRepBuilderAPI_MakeFace(outer.Wire()).Face();
+    auto planePasses = raster(plane, o);
+    auto planePath = connectPasses(planePasses, 0, o, &plane);
+    check(!planePath.poses.empty(), "plane snake generated");
+    int planeApproaches = 0, planeRetracts = 0;
+    for (size_t i = 1; i < planePath.poses.size(); ++i) {
+      auto &a = planePath.poses[i - 1];
+      auto &b = planePath.poses[i];
+      check(planePath.poses.front().q.angularDistance(b.q) < 1e-10,
+            "plane orientation constant through all snake reversals");
+      check(b.motion != 2, "plane rows connected on surface without transfers");
+      planeApproaches += b.motion == 3 && a.motion != 3;
+      planeRetracts += b.motion == 1 && a.motion != 1;
+    }
+    check(planeApproaches == 1 && planeRetracts == 1,
+          "one approach and one retract for connected plane");
+    for (size_t i = 1; i < planePasses.size(); ++i)
+      check((planePasses[i].poses.back().p - planePasses[i].poses.front().p)
+                .dot(planePasses[i - 1].poses.back().p - planePasses[i - 1].poses.front().p) < 0,
+            "snake feed directions alternate independently of orientation");
     BRepBuilderAPI_MakeFace ring(outer.Wire());
     BRepBuilderAPI_MakePolygon inner;
     inner.Add(gp_Pnt(8, 8, 0));
@@ -170,12 +210,25 @@ int main(int argc, char **argv) {
       check(a.q.angularDistance(b.q) <=
                 o.angleDeg * 3.141592653589793 / 180 + 1e-8,
             "connected orientation step bounded");
+      check(std::abs((b.q * a.q.conjugate()).vec().dot(a.q * V::UnitZ())) < 1e-9,
+            "complete trajectory has no added axial spin");
+      if (a.motion == 0 && b.motion == 0) {
+        // Demo graph is z = 8u(1-u) + 4v(1-v), x=20u,y=20v.
+        // Test internal XYZ interpolation, including the links between rows.
+        for (double f : {.25, .5, .75}) {
+          V p = (1-f)*a.p + f*b.p;
+          double u=p.x()/20, v=p.y()/20;
+          check(std::abs(p.z()-(8*u*(1-u)+4*v*(1-v))) <= o.chord,
+                "working chord including row link follows Bezier surface");
+        }
+      }
       if (b.motion == 2)
         check(std::min(a.p.z(), b.p.z()) > 3 + o.length,
               "transfer above entire model");
     }
-    for (int kind : kinds)
-      check(kind > 0, "approach cut retract transfer all present");
+    check(kinds[0] > 0 && kinds[1] > 0 && kinds[3] > 0 && kinds[2] == 0,
+          "Bezier snake joins all rows on surface with only initial/final lift");
+    check(!continuous.segmentCollision, "Bezier snake sweep has no detected gouge");
     for (auto &pass : scene.faces[0].passes) {
       for (auto &endpoint : {pass.poses.front(), pass.poses.back()}) {
         bool included = false;
@@ -184,15 +237,19 @@ int main(int argc, char **argv) {
         check(included, "whole-face path includes every pass endpoint");
       }
     }
-    auto holePath = connectPasses(trimmed, 0, o);
+    auto ringFace = ring.Face();
+    auto holePath = connectPasses(trimmed, 0, o, &ringFace);
     check(!holePath.poses.empty(), "trimmed face joined");
+    bool holeTransfer = false;
     for (size_t k = 1; k < holePath.poses.size(); ++k) {
+      holeTransfer |= holePath.poses[k].motion == 2;
       if (holePath.poses[k].motion != 0)
         continue;
       V mid = (holePath.poses[k - 1].p + holePath.poses[k].p) / 2;
       check(!(mid.x() > 8 && mid.x() < 12 && mid.y() > 8 && mid.y() < 12),
             "no cutting across hole");
     }
+    check(holeTransfer, "hole requires elevated transfer");
     auto sideways = trimmed;
     for (auto &pass : sideways)
       for (auto &pose : pass.poses)
