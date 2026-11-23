@@ -62,4 +62,5 @@ jobs:
           path: |
             build-bezier-viewer/Release/*.exe
             build-bezier-viewer/Release/*.dll
+            build-bezier-viewer/Release/licenses/
             build-bezier-viewer/demo/

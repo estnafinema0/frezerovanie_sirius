@@ -36,3 +36,5 @@ if(WIN32)
    $<TARGET_RUNTIME_DLLS:${target}> $<TARGET_FILE_DIR:${target}> COMMAND_EXPAND_LISTS)
  endforeach()
 endif()
+add_custom_command(TARGET MillingAnalyzer POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_directory
+ "${CMAKE_CURRENT_SOURCE_DIR}/licenses" "$<TARGET_FILE_DIR:MillingAnalyzer>/licenses")

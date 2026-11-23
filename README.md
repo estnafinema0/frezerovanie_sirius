@@ -161,3 +161,7 @@ freza_sirius\
 ### Экспериментальный аналитический CAM
 
 Отдельная ветка `feature/bezier-offline`: [расчёт огибающей плоской фрезы на поверхности Безье](docs/15-bezier-method.md), офлайн CLI и непрерывная проверка отрезков. Не требует OpenCAMLib, не заменяет STL-импорт и не включает ориентацию ABB.
+
+Новый экспериментальный [Milling Geometry Analyzer](docs/16-milling-analyzer.md)
+показывает STEP/Bezier в 3D, растровые проходы и XYZ + quaternion инструмента.
+Это отдельная офлайн-программа; рабочая передача FrezaEgm/ABB не изменяется.
