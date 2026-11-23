@@ -9,6 +9,7 @@ MODULE VirtualEgm
     VAR num lastBeat;
     VAR num staleSeconds:=0;
     VAR egmident id;
+    VAR bool acquired:=FALSE;
     VAR pose baseFrame:=[[0,0,0],[1,0,0,0]];
     VAR egm_minmax linear:=[-0.1,0.1];
     VAR egm_minmax angular:=[-0.5,0.5];
@@ -17,11 +18,14 @@ MODULE VirtualEgm
             TPWrite "Virtual controller only. Read experiment README.";
             RETURN;
         ENDIF
+        acquired:=FALSE;
+        staleSeconds:=0;
         simulationStop:=FALSE;
         lastBeat:=forceHeartbeat;
         WaitUntil forceHeartbeat<>lastBeat\MaxTime:=5;
         MoveJ simHome,v20,fine,simTool;
         EGMGetId id;
+        acquired:=TRUE;
         ! Configure a separate UdpUc device: VIRTUAL_POSE, 127.0.0.1:6512.
         EGMSetupUC ROB_1,id,"default","VIRTUAL_POSE"\Pose;
         EGMActPose id\Tool:=simTool\WObj:=wobj0,
@@ -46,8 +50,11 @@ MODULE VirtualEgm
         EGMStop id,EGM_STOP_HOLD;
         EGMWaitCond id;
         EGMReset id;
+        acquired:=FALSE;
     ERROR
-        EGMReset id;
+        IF acquired THEN
+            EGMReset id;
+        ENDIF
         RAISE;
     ENDPROC
 ENDMODULE

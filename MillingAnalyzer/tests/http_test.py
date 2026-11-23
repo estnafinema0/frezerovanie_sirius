@@ -42,6 +42,7 @@ with tempfile.TemporaryDirectory() as tmp:
             request('/load?format=step', b'invalid STEP', status=400)
             request('/calculate?face=1&step=nan', status=400)
             request('/calculate?face=1&diameter=-1', status=400)
+            request('/calculate?face=1&diameter=1e-300', status=400)
             request('/calculate?face=1.5', status=400)
             again = request('/calculate?face=1')
             assert first == again, 'Failed import must preserve model and poses'

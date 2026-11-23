@@ -77,9 +77,9 @@ void Options::validate() const {
   require(spacing >= .1 && spacing <= 100 && step >= .05 && step <= 100 &&
               chord >= 1e-5 && chord <= 1 && angleDeg >= .1 && angleDeg <= 30,
           "Sampling parameters outside supported range");
-  require(clearance <= 200 && diameter <= 100 && length <= 200 &&
-              feed <= 1000 && (normalSign == 1 || normalSign == -1) &&
-              face >= 0,
+  require(clearance <= 200 && diameter >= .01 && diameter <= 100 &&
+              length >= .01 && length <= 200 && feed >= .001 && feed <= 1000 &&
+              (normalSign == 1 || normalSign == -1) && face >= 0,
           "Invalid tool, feed, face or normal sign");
 }
 Model loadStep(const std::filesystem::path &path) {
@@ -262,6 +262,8 @@ std::vector<Pass> raster(const TopoDS_Face &f, const Options &o) {
                .norm();
     vLength = std::max(vLength, d);
   }
+  require(std::isfinite(vLength) && vLength <= 100000,
+          "Surface arc-length estimate exceeds budget");
   const double margin = o.diameter / 2 + .02;
   require(vLength > 2 * margin, "Face too narrow for tool diameter");
   int rows =
