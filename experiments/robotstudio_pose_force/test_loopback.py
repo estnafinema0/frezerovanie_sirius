@@ -89,6 +89,8 @@ def trial(path, stale=False):
                 assert outputs[-1][1][1] > 750.9, 'Nominal XYZ trajectory advanced'
                 assert abs(outputs[-1][2][3]) > .001, 'Quaternion trajectory changed'
                 assert max(abs(v[1][3]-600) for v in outputs) <= .101, 'Bounded normal correction'
+                assert min(v[1][3] for v in outputs) >= 599.999, 'Planner outward normal maps to upward +Z for virtual pencil'
+                assert abs(first[2][2]) > .999, 'Virtual TCP retains home orientation after frame registration'
         finally:
             if proc.poll() is None: proc.kill(); proc.wait()
 

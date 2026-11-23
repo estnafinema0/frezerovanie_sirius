@@ -195,6 +195,9 @@ int run(const std::vector<std::string> &args) {
     double forceSeq = -1, requested = 0, applied = 0;
     auto boot = Clock::now(), start = boot, lastFeedback = boot,
          lastForce = boot, lastSend = boot, doneAt = boot;
+    // Planner +Z points from cutting face to holder. The virtual pencil
+    // TCP +Z points from flange toward tip, so their frames differ by Rx(pi).
+    const Q cutterToTcp(0, 1, 0, 0);
     Q rotation = Q::Identity();
     V translation = V::Zero();
     sockaddr_in peer{};
@@ -294,7 +297,8 @@ int run(const std::vector<std::string> &args) {
       if (!haveForce || age(lastForce) >= .25)
         continue;
       if (!anchored) {
-        rotation = q.normalized() * path.front().q.conjugate();
+        rotation = q.normalized() * cutterToTcp.conjugate() *
+                   path.front().q.conjugate();
         translation = p - rotation * path.front().p;
         start = now;
         lastSend = now;
@@ -311,7 +315,7 @@ int run(const std::vector<std::string> &args) {
       double desired = target.motion == 0 ? requested : 0.;
       applied += std::clamp(desired - applied, -dt, dt);
       target.p = rotation * (target.p + applied * target.n) + translation;
-      target.q = (rotation * target.q).normalized();
+      target.q = (rotation * target.q * cutterToTcp).normalized();
       auto bytes = encode(target, seq++, uint32_t(t * 1000), data, sizeof data);
       need(sendto(egm.s, reinterpret_cast<const char *>(data), int(bytes), 0,
                   reinterpret_cast<sockaddr *>(&peer),
