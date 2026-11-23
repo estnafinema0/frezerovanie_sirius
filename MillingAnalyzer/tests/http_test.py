@@ -70,7 +70,22 @@ with tempfile.TemporaryDirectory() as tmp:
             rough = request('/program'+params+'&plunge=1&mode=rough')
             assert all(op['stage'] == 1 for op in rough['program']['operations'])
             assert rough['program']['stock']['finishRemoved_mm3'] == 0
-            print('HTTP STEP, finishing, rough/full program, input rejection and preservation: passed')
+            # Replace a calculated demo with an unrelated STEP, then a second
+            # imported solid. No filename whitelist or retained demo geometry.
+            mesh = request('/load?format=step', path.read_bytes())
+            assert 'program' not in mesh and len(mesh['faces']) == 6
+            box_job = request('/program?xmin=-2&ymin=-2&zmin=0&xmax=22&ymax=12&zmax=7&plunge=1')
+            assert box_job['program']['stock']['max'] == [22, 12, 7]
+            custom = pathlib.Path(tmp) / 'Деталь с пробелами.STP'
+            custom.write_bytes((pathlib.Path(__file__).parents[1] / 'data' / 'stepped-solid.step').read_bytes())
+            mesh = request('/load?format=step', custom.read_bytes())
+            assert 'program' not in mesh and len(mesh['faces']) == 11
+            loaded_job = request('/program'+params+'&plunge=1')
+            assert loaded_job['program'] == program['program'], 'Imported STEP matches the corresponding solid, not the previous box'
+            request('/load?format=step', b'', status=400)
+            preserved = request('/program'+params+'&plunge=1')
+            assert preserved == loaded_job
+            print('HTTP uploaded STEP replacement, finishing, rough/full program, rejection and preservation: passed')
         finally:
             proc.terminate()
             proc.wait(timeout=10)
