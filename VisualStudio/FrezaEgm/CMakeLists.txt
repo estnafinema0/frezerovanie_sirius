@@ -11,6 +11,12 @@ set(GENERATED_DIR "${CMAKE_CURRENT_SOURCE_DIR}/generated")
 set(DATA_DIR "${CMAKE_CURRENT_SOURCE_DIR}/data")
 
 include(cmake/Cam.cmake)
+# Alternative analytic CAM; independent of OpenCAMLib and of the exchange thread.
+add_library(freza_bezier STATIC src/bezier_cam.cpp)
+target_include_directories(freza_bezier PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+if(MSVC)
+    target_compile_options(freza_bezier PRIVATE /utf-8 /W4 /permissive- /Zc:__cplusplus)
+endif()
 option(FREZA_OFFLINE_TESTS_ONLY "Build portable offline tests, never EGM/GUI" OFF)
 if(FREZA_OFFLINE_TESTS_ONLY)
     enable_testing()

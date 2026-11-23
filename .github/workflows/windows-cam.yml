@@ -32,3 +32,5 @@ jobs:
       - name: Generate reference path offline
         if: matrix.cam == 'ON'
         run: ./build/tests/Release/FrezaEgm_cam_cli.exe VisualStudio/FrezaEgm/data/cam/Primer1.STL build/Primer1-base.csv mm 1 4 0.5 750 0 599.5
+      - name: Analytic Bezier reference (independent of OpenCAMLib)
+        run: ./build/tests/Release/FrezaEgm_bezier_cli.exe VisualStudio/FrezaEgm/data/bezier/plate.bpatch build/bezier-plate.csv 4 0.1 750 0 599.5 2

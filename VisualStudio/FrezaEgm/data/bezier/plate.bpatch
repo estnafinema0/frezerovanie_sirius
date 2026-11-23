@@ -1,0 +1,9 @@
+FREZA_BEZIER_HEIGHTFIELD 1
+units mm
+origin 0 0
+size 20 20
+heights
+0.5 0.5 0.5 0.5
+0.5 0.5 0.5 0.5
+0.5 0.5 0.5 0.5
+0.5 0.5 0.5 0.5

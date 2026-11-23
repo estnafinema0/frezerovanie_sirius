@@ -157,3 +157,7 @@ freza_sirius\
 * Станция `SolutionEGM.rspag` собрана под RobotWare **6.13.0164** и в RobotStudio
   **6.08.01** не работает — используйте `SolutionEGM_6.08.rspag` или станцию
   `RobotStudio/FrezaEGM`.
+
+### Экспериментальный аналитический CAM
+
+Отдельная ветка `feature/bezier-offline`: [расчёт огибающей плоской фрезы на поверхности Безье](docs/15-bezier-method.md), офлайн CLI и непрерывная проверка отрезков. Не требует OpenCAMLib, не заменяет STL-импорт и не включает ориентацию ABB.
