@@ -39,6 +39,12 @@ with tempfile.TemporaryDirectory() as tmp:
             assert len(mesh['faces']) == 6 and all(not f['passes'] for f in mesh['faces'])
             step_job = request('/program?xmin=-2&ymin=-2&zmin=0&xmax=22&ymax=12&zmax=7&plunge=1')
             assert step_job['program']['includedFaces'] and not step_job['program']['collisions']
+            auto = request('/auto-program?xmin=-2&ymin=-2&zmin=0&xmax=22&ymax=12&zmax=7&plunge=1&face=999&finishFaces=999')
+            assert auto['program']['wholeModel'] is True
+            assert len(auto['program']['includedFaces']) == 5
+            assert len(auto['program']['excludedReasons']) == 1
+            assert not auto['program']['collisions'] and not auto['program']['stockCollisions']
+            assert auto['program']['stage'] == sorted(auto['program']['stage'])
             first = request('/calculate?face=1')
             assert first['faces'][0]['passes']
             request('/load?format=step', b'invalid STEP', status=400)

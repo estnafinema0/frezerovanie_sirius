@@ -46,6 +46,9 @@ int run(std::vector<std::string> args) {
         program = true;
         job.stock.plungeConfirmed = true;
         stockExplicit = true;
+      } else if (a == "--auto-program") {
+        program = true;
+        job.wholeModel = true;
       } else if (a == "--program")
         program = true;
       else if (a == "--rough-only") {
@@ -106,7 +109,8 @@ int run(std::vector<std::string> args) {
         options.normalSign = int(n);
       } else if (a == "--help") {
         std::cout
-            << "Program: file.STEP --program --stock xmin ymin zmin xmax ymax "
+            << "Program: file.STEP --auto-program --stock xmin ymin zmin xmax "
+               "ymax "
                "zmax "
                "--confirm-centre-cutting [--step-down mm] [--rough-spacing mm] "
                "[--allowance mm] [--stock-cell mm] [--rough-only]. "
@@ -132,6 +136,10 @@ int run(std::vector<std::string> args) {
       throw std::runtime_error("Choose either STEP or demo");
     if (!demo && !stockDemo && input.empty())
       throw std::runtime_error("Select STEP or --demo");
+    if (job.wholeModel) {
+      options.face = 0;
+      options.normalSign = 1;
+    }
     options.validate();
     if (std::filesystem::exists(output))
       throw std::runtime_error(

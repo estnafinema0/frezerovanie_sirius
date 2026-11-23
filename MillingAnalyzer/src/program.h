@@ -4,6 +4,7 @@ namespace milling {
 struct ProgramSettings {
   StockSettings stock;
   enum Mode { Rough, Finish, Both } mode = Both;
+  bool wholeModel = false; // automatic surface discovery, including side faces
   std::vector<int> finishFaces; // empty = all upward faces in this setup
 };
 struct Operation {
@@ -19,6 +20,7 @@ struct MachiningProgram {
   std::vector<int> stage, operation;
   std::vector<std::string> notices;
   std::vector<int> includedFaces, excludedFaces;
+  std::vector<std::string> excludedReasons;
   std::vector<double> target, roughRemaining, finalRemaining;
   int nx = 0, ny = 0;
   double dx = 0, dy = 0, removed = 0, excess = 0, finishRemoved = 0,

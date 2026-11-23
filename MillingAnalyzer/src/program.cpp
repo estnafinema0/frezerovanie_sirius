@@ -1,7 +1,9 @@
 #include "program.h"
 #include <BRepAlgoAPI_Fuse.hxx>
+#include <BRepBuilderAPI_Transform.hxx>
 #include <BRepClass3d_SolidClassifier.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
+#include <Standard_Failure.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
 #include <algorithm>
@@ -199,8 +201,8 @@ MachiningProgram planProgram(const Model &m, Scene &scene, const Options &o,
     ++solids;
   need(solids == 1, "Stock program requires one closed STEP solid, not an open "
                     "surface or assembly");
-  need(scene.faces.size() <= 32,
-       "Program supports at most 32 faces in one setup");
+  need(scene.faces.size() <= (cfg.wholeModel ? 128 : 32),
+       "Program face budget exceeded; simplify the CAD model");
   StockGrid grid(scene, cfg.stock, o);
   MachiningProgram out;
   out.settings = cfg;
@@ -237,45 +239,200 @@ MachiningProgram planProgram(const Model &m, Scene &scene, const Options &o,
         }
       return has;
     };
+    size_t candidateWork = 0;
+    auto clearPath = [&](const Pass &path) {
+      auto clearPose = [&](const Pose &p) {
+        ++scene.collisionQueries;
+        for (const auto &t : scene.mesh) {
+          need(++candidateWork <= 150000000,
+               "Automatic access check budget exceeded");
+          if (triangleCollision(t, p, r, o.length))
+            return false;
+        }
+        return true;
+      };
+      for (size_t k = 0; k < path.poses.size(); ++k) {
+        const auto &p = path.poses[k];
+        if (!clearPose(p))
+          return false;
+        if (!k)
+          continue;
+        const auto &a = path.poses[k - 1];
+        int n = std::max(2, int(std::ceil(std::max(
+                                (p.p - a.p).norm() / std::min(.25, r / 2),
+                                a.q.angularDistance(p.q) / (2 * pi / 180)))));
+        for (int j = 1; j < n; ++j) {
+          double t = double(j) / n;
+          Pose v = p;
+          v.p = a.p + t * (p.p - a.p);
+          v.q = a.q.slerp(t, p.q);
+          if (!clearPose(v))
+            return false;
+        }
+      }
+      return true;
+    };
+    auto exclude = [&](int id, const std::string &reason) {
+      out.excludedFaces.push_back(id);
+      out.excludedReasons.push_back(reason);
+      scene.faces[size_t(id - 1)].error = reason;
+    };
     std::vector<int> chosen = cfg.finishFaces;
-    if (chosen.empty())
+    if (cfg.wholeModel) {
+      chosen.clear();
+      for (const auto &f : scene.faces)
+        chosen.push_back(f.id);
+    } else if (chosen.empty()) {
       for (const auto &f : scene.faces)
         if (upward(f.id))
           chosen.push_back(f.id);
+    }
     for (const auto &f : scene.faces)
       if (std::find(chosen.begin(), chosen.end(), f.id) == chosen.end())
-        out.excludedFaces.push_back(f.id);
-    need(!chosen.empty(), "No upward finishing faces in this setup");
+        exclude(f.id, "Outside selected top setup");
+    if (!cfg.wholeModel)
+      need(!chosen.empty(), "No upward finishing faces in this setup");
     std::sort(chosen.begin(), chosen.end());
     need(std::adjacent_find(chosen.begin(), chosen.end()) == chosen.end(),
          "Duplicate finish face");
     for (int id : chosen) {
       need(id >= 1 && id <= int(scene.faces.size()),
            "Invalid finishing face ID");
-      need(upward(id), "Selected finishing face is not upward in this setup");
-      Options one = o;
-      one.face = id;
-      auto calculated = analyze(m, one);
-      auto f = calculated.faces[size_t(id - 1)];
-      need(f.error.empty() && f.connectionError.empty() && !f.passes.empty(),
-           "A requested finish face cannot be calculated in this setup");
-      Operation op;
-      op.stage = 2;
-      op.face = id;
-      op.name = "Finish face " + std::to_string(id);
-      op.path = connectPasses(f.passes, cfg.stock.high.z(), o,
-                              &cadFaces[size_t(id - 1)]);
-      // Entry into the finishing allowance is a cutting feed move, not rapid.
-      for (auto &p : op.path.poses)
-        if (p.motion == 3)
-          p.motion = 4;
-      scene.faces[size_t(id - 1)] = std::move(f);
-      out.includedFaces.push_back(id);
-      out.operations.push_back(std::move(op));
+      try {
+        if (!cfg.wholeModel)
+          need(upward(id),
+               "Selected finishing face is not upward in this setup");
+        V average = V::Zero();
+        if (cfg.wholeModel) {
+          for (const auto &t : scene.mesh)
+            if (t.face == id) {
+              V n = (t.b - t.a).cross(t.c - t.a);
+              if (n.norm() <= 1e-12)
+                continue;
+              need(n.normalized().z() >= -1e-6,
+                   "Downward surface requires another setup");
+              average += n;
+            }
+          need(average.norm() > 1e-10,
+               "Surface normals require subdivision into accessible patches");
+          average.normalize();
+          for (const auto &t : scene.mesh)
+            if (t.face == id) {
+              V n = (t.b - t.a).cross(t.c - t.a);
+              if (n.norm() > 1e-12)
+                need(n.normalized().dot(average) > .2,
+                     "Surface normals require subdivision into accessible "
+                     "patches");
+            }
+        }
+        Options one = o;
+        one.face = id;
+        Face f;
+        if (cfg.wholeModel) {
+          // Evaluate the actual B-rep directly, avoiding re-meshing the whole
+          // part for every surface. The composed program is validated below.
+          f = scene.faces[size_t(id - 1)];
+          f.error.clear();
+          f.connectionError.clear();
+          f.passes = raster(cadFaces[size_t(id - 1)], one);
+        } else {
+          auto calculated = analyze(m, one);
+          f = calculated.faces[size_t(id - 1)];
+          need(f.error.empty() && f.connectionError.empty(),
+               "A requested finish face cannot be calculated in this setup");
+        }
+        need(!f.passes.empty(), "No usable passes for this tool and surface");
+        if (cfg.wholeModel)
+          for (const auto &pass : f.passes)
+            for (const auto &pose : pass.poses) {
+              V axis = pose.q * V::UnitZ();
+              need(axis.z() >= -1e-6,
+                   "Downward surface requires another setup");
+              need(axis.dot(average) > .2,
+                   "Surface normals require subdivision into accessible "
+                   "patches");
+            }
+        Operation op;
+        op.stage = 2;
+        op.face = id;
+        op.name = "Finish face " + std::to_string(id);
+        if (!cfg.wholeModel || upward(id)) {
+          op.path = connectPasses(f.passes, cfg.stock.high.z(), o,
+                                  &cadFaces[size_t(id - 1)]);
+        } else {
+          // Work in a rigid local frame whose +Z is the average outward normal.
+          // Its safe plane lies beyond ALL stock corners plus the entire tool
+          // radius bound. UV and normal geometry are preserved by this
+          // rotation.
+          Q rotation = Q::FromTwoVectors(average, V::UnitZ());
+          auto matrix = rotation.toRotationMatrix();
+          gp_Trsf transform;
+          transform.SetValues(matrix(0, 0), matrix(0, 1), matrix(0, 2), 0,
+                              matrix(1, 0), matrix(1, 1), matrix(1, 2), 0,
+                              matrix(2, 0), matrix(2, 1), matrix(2, 2), 0);
+          auto surface =
+              TopoDS::Face(BRepBuilderAPI_Transform(cadFaces[size_t(id - 1)],
+                                                    transform, true)
+                               .Shape());
+          auto passes = f.passes;
+          for (auto &pass : passes)
+            for (auto &pose : pass.poses) {
+              need((pose.q * V::UnitZ()).z() >= -1e-6,
+                   "Downward surface requires another setup");
+              pose.p = rotation * pose.p;
+              pose.n = rotation * pose.n;
+              pose.q = rotation * pose.q;
+            }
+          double top = -1e100;
+          for (double x : {cfg.stock.low.x(), cfg.stock.high.x()})
+            for (double y : {cfg.stock.low.y(), cfg.stock.high.y()})
+              for (double z : {cfg.stock.low.z(), cfg.stock.high.z()})
+                top = std::max(top, (rotation * V(x, y, z)).z());
+          auto path = connectPasses(passes, top, o, &surface);
+          for (auto &pose : path.poses) {
+            pose.p = rotation.conjugate() * pose.p;
+            pose.n = rotation.conjugate() * pose.n;
+            pose.q = rotation.conjugate() * pose.q;
+          }
+          double safeZ =
+              cfg.stock.high.z() + std::hypot(o.length, r) + o.clearance;
+          Pose start = path.poses.front();
+          start.p.z() = std::max(start.p.z(), safeZ);
+          append(op.path, start, 2, o.feed, o);
+          for (size_t k = 0; k < path.poses.size(); ++k)
+            append(op.path, path.poses[k], k ? path.poses[k].motion : 3, o.feed,
+                   o);
+          Pose end = op.path.poses.back();
+          end.p.z() = std::max(end.p.z(), safeZ);
+          append(op.path, end, 1, o.feed, o);
+        }
+        for (auto &p : op.path.poses)
+          if (p.motion == 3)
+            p.motion = 4;
+        if (cfg.wholeModel)
+          need(clearPath(op.path),
+               "Tool or access path intersects the target model");
+        f.trajectory = op.path;
+        scene.faces[size_t(id - 1)] = std::move(f);
+        out.includedFaces.push_back(id);
+        out.operations.push_back(std::move(op));
+      } catch (const Standard_Failure &e) {
+        if (!cfg.wholeModel)
+          throw;
+        exclude(id, e.GetMessageString() ? e.GetMessageString() : "CAD error");
+      } catch (const std::runtime_error &e) {
+        if (!cfg.wholeModel)
+          throw;
+        std::string reason = e.what();
+        // Resource exhaustion is a failure of the job, never hidden as a skip.
+        if (reason.find("budget") != std::string::npos)
+          throw;
+        exclude(id, reason);
+      }
     }
     out.notices.push_back(
-        "Finishing covers selected upward faces only; side/bottom faces and "
-        "inaccessible pockets require another setup or tool.");
+        "Automatic coverage is reported per surface. Downward faces, narrow "
+        "regions and inaccessible patches may require another setup or tool.");
   }
   need(!out.operations.empty(),
        "No removable stock / no operations for these settings");
@@ -287,6 +444,12 @@ MachiningProgram planProgram(const Model &m, Scene &scene, const Options &o,
         Pose raised = out.trajectory.poses.back();
         raised.p.z() = std::max(raised.p.z(), op.path.poses.front().p.z());
         append(out.trajectory, raised, 1, o.feed, o);
+        // Opposite side normals have no unique minimum rotation. Route the
+        // orientation through +Z above the entire stock, never at contact.
+        Pose neutral = out.trajectory.poses.back();
+        neutral.q = Q::Identity();
+        neutral.n = V::UnitZ();
+        append(out.trajectory, neutral, 2, o.feed, o);
       }
       append(out.trajectory, op.path.poses[k], k ? op.path.poses[k].motion : 2,
              op.path.poses[k].motion == 4
@@ -452,6 +615,9 @@ MachiningProgram planProgram(const Model &m, Scene &scene, const Options &o,
       slice.poses.push_back(p);
     }
     out.operations[i].path = std::move(slice);
+    if (out.operations[i].stage == 2)
+      scene.faces[size_t(out.operations[i].face - 1)].trajectory =
+          out.operations[i].path;
     begin = end;
   }
   out.notices.push_back(
@@ -467,6 +633,7 @@ std::string programJson(const Scene &s, const MachiningProgram &p) {
   o << base
     << ",\"program\":{\"version\":1,\"robotReady\":false,\"collisions\":"
     << (p.collisions ? "true" : "false")
+    << ",\"wholeModel\":" << (p.settings.wholeModel ? "true" : "false")
     << ",\"stockCollisions\":" << (p.stockCollisions ? "true" : "false")
     << ",\"stock\":{\"min\":";
   vector(o, p.settings.stock.low);
@@ -491,6 +658,13 @@ std::string programJson(const Scene &s, const MachiningProgram &p) {
   array(o, p.includedFaces);
   o << ",\"excludedFaces\":";
   array(o, p.excludedFaces);
+  o << ",\"excludedReasons\":[";
+  for (size_t i = 0; i < p.excludedReasons.size(); ++i) {
+    if (i)
+      o << ',';
+    o << quoted(p.excludedReasons[i]);
+  }
+  o << ']';
   o << ",\"notices\":[";
   for (size_t i = 0; i < p.notices.size(); ++i) {
     if (i)

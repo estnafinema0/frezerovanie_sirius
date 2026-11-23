@@ -1,4 +1,5 @@
 #include "program.h"
+#include <BRepAlgoAPI_Cut.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <STEPControl_Writer.hxx>
@@ -154,6 +155,62 @@ int main(int argc, char **argv) {
     check(subset.includedFaces.size() == 1 &&
               subset.excludedFaces.size() + 1 == scene.faces.size(),
           "explicit subset reports every excluded face");
+    // Automatic whole-part job: one top and four side faces. No face selection.
+    Model box{BRepPrimAPI_MakeBox(20, 10, 5).Shape(), "mm"};
+    auto boxScene = analyze(box, preview);
+    auto automatic = cfg;
+    automatic.wholeModel = true;
+    automatic.stock.high = V(22, 12, 7);
+    automatic.finishFaces = {999}; // ignored by the automatic planner
+    auto complete = planProgram(box, boxScene, o, automatic);
+    check(complete.includedFaces.size() == 5, "automatic top and four sides");
+    check(complete.excludedFaces.size() == 1 &&
+              complete.excludedReasons.size() == 1,
+          "underside is reported with a reason");
+    check(
+        !complete.collisions && !complete.stockCollisions,
+        "automatic entries and side transfers checked against model and stock");
+    size_t sides = 0;
+    for (auto &op : complete.operations)
+      if (op.stage == 2) {
+        auto &f = boxScene.faces[size_t(op.face - 1)];
+        for (auto &pass : f.passes)
+          for (auto &pose : pass.poses)
+            check((pose.q * V::UnitZ() - pose.n).norm() < 1e-10,
+                  "finishing tool perpendicular to actual CAD surface");
+        sides += std::abs(f.passes.front().poses.front().n.z()) < .01;
+      }
+    check(sides == 4, "vertical surfaces actually machined");
+    for (size_t i = 1; i < complete.stage.size(); ++i) {
+      check(complete.stage[i] >= complete.stage[i - 1],
+            "automatic rough before finish");
+      check(complete.trajectory.poses[i].t > complete.trajectory.poses[i - 1].t,
+            "automatic program time strictly increasing");
+    }
+    auto automaticStep = cfg;
+    automaticStep.wholeModel = true;
+    auto stepScene = analyze(model, preview);
+    auto partial = planProgram(model, stepScene, o, automaticStep);
+    check(!partial.includedFaces.empty() && partial.excludedReasons.size() > 1,
+          "narrow faces do not abort other operations");
+    // A tool longer than a pocket width cannot reach its inner vertical walls.
+    // Automatic planning must report them instead of exporting the collision.
+    auto outer = BRepPrimAPI_MakeBox(20, 20, 10).Shape();
+    auto cavity = BRepPrimAPI_MakeBox(gp_Pnt(5, 5, 2), 10, 10, 10).Shape();
+    Model pocket{BRepAlgoAPI_Cut(outer, cavity).Shape(), "mm"};
+    auto pocketScene = analyze(pocket, preview);
+    auto pocketCfg = cfg;
+    pocketCfg.wholeModel = true;
+    pocketCfg.stock.high = V(22, 22, 12);
+    auto pocketJob = planProgram(pocket, pocketScene, o, pocketCfg);
+    bool accessRejected = false;
+    for (const auto &reason : pocketJob.excludedReasons)
+      accessRejected |=
+          reason == "Tool or access path intersects the target model";
+    check(accessRejected && !pocketJob.includedFaces.empty(),
+          "automatic planner skips inaccessible pocket walls with reasons");
+    check(!pocketJob.collisions,
+          "inaccessible candidates absent from final program");
     auto open = demo();
     auto openScene = analyze(open, preview);
     rejects([&] { planProgram(open, openScene, o, cfg); },

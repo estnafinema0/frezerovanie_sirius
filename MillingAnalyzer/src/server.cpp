@@ -39,7 +39,7 @@ double parameter(const httplib::Request &r, const char *name, double fallback) {
     throw std::runtime_error("Invalid numeric parameter");
   return x;
 }
-milling::Options options(const httplib::Request &r) {
+milling::Options options(const httplib::Request &r, bool whole = false) {
   milling::Options o;
   o.spacing = parameter(r, "spacing", 2);
   o.step = parameter(r, "step", 1);
@@ -49,7 +49,8 @@ milling::Options options(const httplib::Request &r) {
   o.length = parameter(r, "length", 20);
   o.feed = parameter(r, "feed", 10);
   o.clearance = parameter(r, "clearance", 5);
-  double face = parameter(r, "face", 1), sign = parameter(r, "sign", 1);
+  double face = whole ? 1 : parameter(r, "face", 1),
+         sign = whole ? 1 : parameter(r, "sign", 1);
   if (face < 1 || face > 1000 || face != std::floor(face) ||
       (sign != 1 && sign != -1))
     throw std::runtime_error("Invalid face or normal sign");
@@ -142,12 +143,15 @@ int serve(bool openBrowser) {
           result = milling::analyze(candidate, o);
           nextModel = std::move(candidate);
         } else if (r.path == root + "/program" ||
-                   r.path == root + "/program-demo") {
+                   r.path == root + "/program-demo" ||
+                   r.path == root + "/auto-program") {
           bool demoProgram = r.path == root + "/program-demo";
           if (demoProgram)
             nextModel = milling::programDemo();
-          auto o = options(r);
+          auto o = options(r, r.path == root + "/auto-program");
+          o.face = 0; // program scope never depends on the displayed face
           milling::ProgramSettings cfg;
+          cfg.wholeModel = r.path == root + "/auto-program";
           if (r.get_param_value("mode") == "rough")
             cfg.mode = milling::ProgramSettings::Rough;
           else if (!r.get_param_value("mode").empty() &&
@@ -169,7 +173,7 @@ int serve(bool openBrowser) {
           cfg.stock.plungeConfirmed =
               demoProgram || r.get_param_value("plunge") == "1";
           auto faces = r.get_param_value("finishFaces");
-          if (!faces.empty() && faces != "auto") {
+          if (!cfg.wholeModel && !faces.empty() && faces != "auto") {
             std::istringstream list(faces);
             std::string item;
             while (std::getline(list, item, ',')) {
@@ -210,6 +214,7 @@ int serve(bool openBrowser) {
     server.Post(root + "/calculate", api);
     server.Post(root + "/demo", api);
     server.Post(root + "/program", api);
+    server.Post(root + "/auto-program", api);
     server.Post(root + "/program-demo", api);
     std::string url = origin + root + "/";
     std::cout << "Milling Analyzer local UI: " << url
