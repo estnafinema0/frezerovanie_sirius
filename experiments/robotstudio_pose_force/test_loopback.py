@@ -10,7 +10,7 @@ import sys
 import tempfile
 import time
 
-EXE = sys.argv[1]
+EXE = sys.argv[1] if __name__ == "__main__" else None
 HEADER = 'face_id,pass_id,sample_id,part_x_mm,part_y_mm,part_z_mm,qw,qx,qy,qz,nx,ny,nz,time_s,collision,sweep_collision,motion'
 def varint(n):
     result = bytearray()
@@ -101,18 +101,19 @@ def trial(path, stale=False):
         finally:
             if proc.poll() is None: proc.kill(); proc.wait()
 
-with tempfile.TemporaryDirectory() as tmp:
-    path = pathlib.Path(tmp)/'whole.poses.csv'
-    with path.open('w', newline='') as f:
-        f.write(HEADER+'\n')
-        writer = csv.writer(f)
-        for k in range(6):
-            a = .02*k/5
-            writer.writerow([1,0,k,k/5,0,0,math.cos(a/2),0,0,math.sin(a/2),0,0,1,k/25,0,0,0])
-    trial(path)
-    trial(path, stale=True)
-    bad = pathlib.Path(tmp)/'bad.csv'
-    bad.write_text(path.read_text().replace(',0,0,0\n', ',1,0,0\n'))
-    rejected = subprocess.run([EXE,'--virtual-only','--anchor-first-to-feedback',str(bad)], capture_output=True, text=True)
-    assert rejected.returncode == 1 and 'Collision flagged' in rejected.stderr
-print('Virtual UDP pose/orientation, force limits, completion handshake, stale-force stop and rejection: passed')
+if __name__ == "__main__":
+    with tempfile.TemporaryDirectory() as tmp:
+        path = pathlib.Path(tmp)/'whole.poses.csv'
+        with path.open('w', newline='') as f:
+            f.write(HEADER+'\n')
+            writer = csv.writer(f)
+            for k in range(6):
+                a = .02*k/5
+                writer.writerow([1,0,k,k/5,0,0,math.cos(a/2),0,0,math.sin(a/2),0,0,1,k/25,0,0,0])
+        trial(path)
+        trial(path, stale=True)
+        bad = pathlib.Path(tmp)/'bad.csv'
+        bad.write_text(path.read_text().replace(',0,0,0\n', ',1,0,0\n'))
+        rejected = subprocess.run([EXE,'--virtual-only','--anchor-first-to-feedback',str(bad)], capture_output=True, text=True)
+        assert rejected.returncode == 1 and 'Collision flagged' in rejected.stderr
+    print('Virtual UDP pose/orientation, force limits, completion handshake, stale-force stop and rejection: passed')
