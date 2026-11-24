@@ -1,6 +1,8 @@
 #include "operation_plan.h"
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
+#include <BRepBuilderAPI_MakeFace.hxx>
+#include <BRepBuilderAPI_MakePolygon.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
@@ -109,6 +111,29 @@ int main(int argc, char **argv) {
       }
     check(fractional && prior == 0,
           "spiral has continuous pitch and full bottom lap");
+    BRepBuilderAPI_MakePolygon polygon;
+    for (auto xy : std::vector<V>{V(0, 0, 0), V(20, 0, 0), V(20, 8, 0),
+                                  V(8, 8, 0), V(8, 20, 0), V(0, 20, 0)})
+      polygon.Add(gp_Pnt(xy.x(), xy.y(), xy.z()));
+    polygon.Close();
+    Model lpart{
+        BRepPrimAPI_MakePrism(BRepBuilderAPI_MakeFace(polygon.Wire()).Face(),
+                              gp_Vec(0, 0, 4))
+            .Shape(),
+        "mm"};
+    auto ls = analyze(lpart, preview);
+    auto lc = contour;
+    lc.face = horizontalFace(lpart, 4);
+    auto lp = planOperations(lpart, ls, o, stock, {lc});
+    check(!lp.collisions && !lp.stockCollisions,
+          "concave contour offset clear");
+    bool followsNotch = false;
+    for (auto &p : lp.trajectory.poses)
+      if (p.motion == 0 && p.p.x() > 8 && p.p.x() < 15 && p.p.y() > 8 &&
+          p.p.y() < 15)
+        followsNotch = true;
+    check(followsNotch,
+          "real L contour follows recess instead of bounding rectangle");
     OperationSpec surface = face;
     surface.kind = "surface";
     surface.allowance = 0;
