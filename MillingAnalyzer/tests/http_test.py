@@ -27,7 +27,10 @@ with tempfile.TemporaryDirectory() as tmp:
                 try:
                     with urllib.request.urlopen(req, timeout=60) as r:
                         assert r.status == status
-                        return json.load(r)
+                        data = json.load(r)
+                        # Compare geometry independently of the new calculation generation.
+                        data.pop('trajectoryRevision', None)
+                        return data
                 except urllib.error.HTTPError as e:
                     assert e.code == status, (e.code, e.read())
                     return json.load(e)

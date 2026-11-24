@@ -77,6 +77,14 @@ jobs:
           cmake --build build-virtual --config Release --parallel 4
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           ctest --test-dir build-virtual -C Release --output-on-failure
+      - name: Package integrated RobotStudio RW6 application
+        shell: pwsh
+        run: ./MillingAnalyzer/tools/package-rw6.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MillingAnalyzer-RW6-EGM-Windows-x64
+          path: build-bezier-viewer/RobotStudio-RW6/
+          if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
           name: MillingAnalyzer-Windows-x64
