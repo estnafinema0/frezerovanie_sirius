@@ -6,6 +6,7 @@ import sys
 import tempfile
 import urllib.error
 import urllib.request
+import urllib.parse
 
 exe, fixture_exe = sys.argv[1:]
 with tempfile.TemporaryDirectory() as tmp:
@@ -37,6 +38,21 @@ with tempfile.TemporaryDirectory() as tmp:
             request('/calculate', status=403, origin='https://example.com')
             mesh = request('/load?format=step', path.read_bytes())
             assert len(mesh['faces']) == 6 and all(not f['passes'] for f in mesh['faces'])
+            assert len(mesh['operationCatalog']) == 6
+            floor = next(f for f in mesh['operationCatalog'] if f['horizontal'] and abs(f['z']-5)<1e-6)
+            tree = dict(xmin=-2,ymin=-2,zmin=0,xmax=22,ymax=12,zmax=7,plunge=1,count=2,revision=mesh['modelRevision'])
+            for i,op in enumerate([dict(kind='face',face=floor['face'],top=7,bottom=5,depth=1,allowance=0,confirmed=1),dict(kind='rough',face=0,top=7,bottom=0,depth=1,allowance=.3,confirmed=1)]):
+                tree.update({f'op{i}.{k}':v for k,v in op.items()})
+            operation_result=request('/operations?'+urllib.parse.urlencode(tree))
+            assert [op['name'] for op in operation_result['program']['operations']]==['1. face','2. rough']
+            assert not operation_result['program']['collisions']
+            assert not operation_result['program']['stockCollisions']
+            bad_tree=dict(tree);bad_tree['op1.confirmed']=0
+            failure=request('/operations?'+urllib.parse.urlencode(bad_tree),status=400)
+            assert 'Operation 2' in failure['error']
+            bad_tree=dict(tree);bad_tree['revision']=0
+            assert 'Model changed' in request('/operations?'+urllib.parse.urlencode(bad_tree),status=400)['error']
+            assert request('/operations?'+urllib.parse.urlencode(tree))==operation_result
             step_job = request('/program?xmin=-2&ymin=-2&zmin=0&xmax=22&ymax=12&zmax=7&plunge=1')
             assert step_job['program']['includedFaces'] and not step_job['program']['collisions']
             auto = request('/auto-program?xmin=-2&ymin=-2&zmin=0&xmax=22&ymax=12&zmax=7&plunge=1&face=999&finishFaces=999')

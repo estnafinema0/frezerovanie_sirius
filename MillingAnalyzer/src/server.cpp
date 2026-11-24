@@ -9,6 +9,7 @@
 #include "server.h"
 #include "geometry.h"
 #include "httplib.h"
+#include "operation_plan.h"
 #include "program.h"
 #include "viewer_resource.h"
 #include <Standard_Failure.hxx>
@@ -73,7 +74,14 @@ int serve(bool openBrowser) {
     server.set_write_timeout(120);
     std::mutex mutex;
     auto model = milling::demo();
-    auto initial = milling::json(milling::analyze(model, milling::Options{}));
+    auto initial = milling::withOperationCatalog(
+        milling::json(milling::analyze(model, milling::Options{})), model);
+    unsigned modelRevision = 1;
+    auto revisionJson = [](std::string text, unsigned revision) {
+      text.pop_back();
+      return text + ",\"modelRevision\":" + std::to_string(revision) + "}";
+    };
+    initial = revisionJson(std::move(initial), modelRevision);
     int port = server.bind_to_any_port("127.0.0.1");
     if (port < 0)
       throw std::runtime_error("Cannot bind local viewer");
@@ -142,13 +150,15 @@ int serve(bool openBrowser) {
           o.previewOnly = true;
           result = milling::analyze(candidate, o);
           nextModel = std::move(candidate);
-        } else if (r.path == root + "/program" ||
+        } else if (r.path == root + "/operations" ||
+                   r.path == root + "/program" ||
                    r.path == root + "/program-demo" ||
                    r.path == root + "/auto-program") {
           bool demoProgram = r.path == root + "/program-demo";
           if (demoProgram)
             nextModel = milling::programDemo();
-          auto o = options(r, r.path == root + "/auto-program");
+          auto o = options(r, r.path == root + "/auto-program" ||
+                                  r.path == root + "/operations");
           o.face = 0; // program scope never depends on the displayed face
           milling::ProgramSettings cfg;
           cfg.wholeModel = r.path == root + "/auto-program";
@@ -187,8 +197,44 @@ int serve(bool openBrowser) {
           auto preview = o;
           preview.previewOnly = true;
           result = milling::analyze(nextModel, preview);
-          auto program = milling::planProgram(nextModel, result, o, cfg);
-          data = milling::programJson(result, program);
+          milling::MachiningProgram program;
+          std::vector<milling::OperationSpec> specs;
+          if (r.path == root + "/operations") {
+            if (parameter(r, "revision", 0) != modelRevision)
+              throw std::runtime_error("Model changed in another window; "
+                                       "reload and rebuild operations");
+            double count = parameter(r, "count", 0);
+            if (count < 1 || count > 32 || count != std::floor(count))
+              throw std::runtime_error("Confirm between 1 and 32 operations");
+
+            for (int i = 0; i < int(count); ++i) {
+              std::string prefix = "op" + std::to_string(i) + ".";
+              auto number = [&](const char *key, double fallback) {
+                return parameter(r, (prefix + key).c_str(), fallback);
+              };
+              milling::OperationSpec op;
+              op.kind = r.get_param_value(prefix + "kind");
+              double face = number("face", 0), wire = number("wire", 1);
+              if (face < 0 || face > 1000 || face != std::floor(face) ||
+                  wire < 1 || wire > 1000 || wire != std::floor(wire))
+                throw std::runtime_error("Invalid operation geometry ID");
+              op.face = int(face);
+              op.wire = int(wire);
+              op.confirmed = r.get_param_value(prefix + "confirmed") == "1";
+              op.spiral = r.get_param_value(prefix + "spiral") == "1";
+              op.top = number("top", cfg.stock.high.z());
+              op.bottom = number("bottom", cfg.stock.low.z());
+              op.depth = number("depth", cfg.stock.stepDown);
+              op.allowance = number("allowance", 0);
+              specs.push_back(op);
+            }
+            program =
+                milling::planOperations(nextModel, result, o, cfg.stock, specs);
+          } else
+            program = milling::planProgram(nextModel, result, o, cfg);
+          data = specs.empty()
+                     ? milling::programJson(result, program)
+                     : milling::operationPlanJson(result, program, specs);
         } else if (r.path == root + "/demo") {
           nextModel = milling::demo(r.get_param_value("kind") == "bowl");
           result = milling::analyze(nextModel, milling::Options{});
@@ -196,6 +242,11 @@ int serve(bool openBrowser) {
           result = milling::analyze(model, options(r));
         if (data.empty())
           data = milling::json(result);
+        data = milling::withOperationCatalog(std::move(data), nextModel);
+        if (r.path == root + "/load" || r.path == root + "/demo" ||
+            r.path == root + "/program-demo")
+          ++modelRevision;
+        data = revisionJson(std::move(data), modelRevision);
         model = std::move(nextModel);
         initial = data;
         res.set_header("Cache-Control", "no-store");
@@ -213,6 +264,7 @@ int serve(bool openBrowser) {
     server.Post(root + "/load", api);
     server.Post(root + "/calculate", api);
     server.Post(root + "/demo", api);
+    server.Post(root + "/operations", api);
     server.Post(root + "/program", api);
     server.Post(root + "/auto-program", api);
     server.Post(root + "/program-demo", api);
