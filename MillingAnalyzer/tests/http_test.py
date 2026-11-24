@@ -6,6 +6,7 @@ import sys
 import tempfile
 import urllib.error
 import urllib.request
+import urllib.parse
 
 exe, fixture_exe = sys.argv[1:]
 with tempfile.TemporaryDirectory() as tmp:
@@ -37,6 +38,42 @@ with tempfile.TemporaryDirectory() as tmp:
             request('/calculate', status=403, origin='https://example.com')
             mesh = request('/load?format=step', path.read_bytes())
             assert len(mesh['faces']) == 6 and all(not f['passes'] for f in mesh['faces'])
+            assert len(mesh['operationCatalog']) == 6
+            floor = next(f for f in mesh['operationCatalog'] if f['horizontal'] and abs(f['z']-5)<1e-6)
+            tree = dict(xmin=-2,ymin=-2,zmin=0,xmax=22,ymax=12,zmax=7,plunge=1,count=2,revision=mesh['modelRevision'])
+            for i,op in enumerate([dict(kind='face',face=floor['face'],top=7,bottom=5,depth=1,allowance=0,confirmed=1),dict(kind='rough',face=0,top=7,bottom=0,depth=1,allowance=.3,confirmed=1)]):
+                tree.update({f'op{i}.{k}':v for k,v in op.items()})
+            operation_result=request('/operations?'+urllib.parse.urlencode(tree))
+            assert [op['name'] for op in operation_result['program']['operations']]==['1. face','2. rough']
+            assert not operation_result['program']['collisions']
+            assert not operation_result['program']['stockCollisions']
+            bad_tree=dict(tree);bad_tree['op1.confirmed']=0
+            failure=request('/operations?'+urllib.parse.urlencode(bad_tree),status=400)
+            assert 'Operation 2' in failure['error']
+            bad_tree=dict(tree);bad_tree['revision']=0
+            assert 'Model changed' in request('/operations?'+urllib.parse.urlencode(bad_tree),status=400)['error']
+            assert request('/operations?'+urllib.parse.urlencode(tree))==operation_result
+            reset = request('/reset-trajectory?revision='+str(mesh['modelRevision'])+'&diameter=3')
+            assert 'program' not in reset and 'operationSpecs' not in reset
+            assert reset['mesh'] == mesh['mesh'] and reset['modelRevision'] == mesh['modelRevision']
+            assert reset['diameter'] == 3
+            assert all(not f['passes'] and not f['trajectory']['poses'] for f in reset['faces'])
+            with urllib.request.urlopen(root+'/') as r:
+                saved = r.read().decode()
+                assert '"operationTree":true' not in saved
+                assert 'id="clearTrajectory"' in saved
+            assert 'Model changed' in request('/reset-trajectory?revision=0',status=400)['error']
+            assert request('/operations?'+urllib.parse.urlencode(tree)) == operation_result
+            face_tree = {k:v for k,v in tree.items() if not k.startswith('op1.')}
+            face_tree.update(count=1, zmax=9)
+            face_tree.update({'op0.kind':'face_rough','op0.top':9,'op0.bottom':0,'op0.optimize':0})
+            old_rough = request('/operations?'+urllib.parse.urlencode(face_tree))
+            assert old_rough['operationSpecs'][0]['optimize'] is False
+            face_tree['op0.optimize']=1
+            new_rough = request('/operations?'+urllib.parse.urlencode(face_tree))
+            assert new_rough['operationSpecs'][0]['optimize'] is True
+            assert new_rough['program']['trajectory']['poses'][-1]['t'] < old_rough['program']['trajectory']['poses'][-1]['t']
+            assert not new_rough['program']['collisions'] and not new_rough['program']['stockCollisions']
             step_job = request('/program?xmin=-2&ymin=-2&zmin=0&xmax=22&ymax=12&zmax=7&plunge=1')
             assert step_job['program']['includedFaces'] and not step_job['program']['collisions']
             auto = request('/auto-program?xmin=-2&ymin=-2&zmin=0&xmax=22&ymax=12&zmax=7&plunge=1&face=999&finishFaces=999')

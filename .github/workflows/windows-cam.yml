@@ -46,7 +46,7 @@ jobs:
           path: |
             build-bezier-viewer-deps/occt
             build-bezier-viewer-deps/eigen
-          key: occt-7.9.3-eigen-3.4.0-msvc-x64-v1
+          key: occt-7.9.3-eigen-3.4.0-msvc-x64-offset-v2
       - name: Build pinned OCCT and Eigen
         run: cmake -P MillingAnalyzer/cmake/Dependencies.cmake
       - uses: actions/cache/save@v4
@@ -55,13 +55,15 @@ jobs:
           path: |
             build-bezier-viewer-deps/occt
             build-bezier-viewer-deps/eigen
-          key: occt-7.9.3-eigen-3.4.0-msvc-x64-v1
+          key: occt-7.9.3-eigen-3.4.0-msvc-x64-offset-v2
       - name: Configure independent geometry viewer
         run: cmake -S MillingAnalyzer -B build-bezier-viewer -G "Visual Studio 17 2022" -A x64 -DCMAKE_PREFIX_PATH="$pwd/build-bezier-viewer-deps/occt" -DEIGEN_INCLUDE_DIR="$pwd/build-bezier-viewer-deps/eigen"
       - name: Build geometry application
         run: cmake --build build-bezier-viewer --config Release --parallel 4
       - name: Geometry, quaternion, trim, collision and protected ABB tests
         run: ctest --test-dir build-bezier-viewer -C Release --output-on-failure
+      - name: Create ordered operation example
+        run: ./build-bezier-viewer/Release/milling_operation_tests.exe --example build-bezier-viewer/operation-demo
       - name: Create interactive Bezier preview
         run: ./build-bezier-viewer/Release/MillingAnalyzer.exe --demo --output build-bezier-viewer/demo
       - name: Create roughing and finishing program from reference STEP
@@ -85,6 +87,9 @@ jobs:
             build-bezier-viewer/demo/
             build-bezier-viewer/program-demo/
             build-bezier-viewer/automatic-demo/
+            build-bezier-viewer/operation-demo/
+            MillingAnalyzer/data/blind-hole.step
+            docs/18-operation-tree.md
             MillingAnalyzer/data/stepped-solid.step
             MillingAnalyzer/data/automatic-box.step
             docs/17-roughing-finishing-program.md
