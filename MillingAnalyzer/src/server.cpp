@@ -120,7 +120,14 @@ int serve(bool openBrowser) {
         milling::Scene result;
         auto nextModel = model;
         std::string data;
-        if (r.path == root + "/load") {
+        if (r.path == root + "/reset-trajectory") {
+          if (parameter(r, "revision", 0) != modelRevision)
+            throw std::runtime_error("Model changed in another window; reload "
+                                     "and rebuild operations");
+          auto o = options(r, true);
+          o.previewOnly = true;
+          result = milling::analyze(model, o);
+        } else if (r.path == root + "/load") {
           auto format = r.get_param_value("format");
           if (format != "step" && format != "bpatch")
             throw std::runtime_error("Supported files: STEP, STP, bpatch");
@@ -264,6 +271,7 @@ int serve(bool openBrowser) {
     server.Post(root + "/load", api);
     server.Post(root + "/calculate", api);
     server.Post(root + "/demo", api);
+    server.Post(root + "/reset-trajectory", api);
     server.Post(root + "/operations", api);
     server.Post(root + "/program", api);
     server.Post(root + "/auto-program", api);

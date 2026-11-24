@@ -53,6 +53,17 @@ with tempfile.TemporaryDirectory() as tmp:
             bad_tree=dict(tree);bad_tree['revision']=0
             assert 'Model changed' in request('/operations?'+urllib.parse.urlencode(bad_tree),status=400)['error']
             assert request('/operations?'+urllib.parse.urlencode(tree))==operation_result
+            reset = request('/reset-trajectory?revision='+str(mesh['modelRevision'])+'&diameter=3')
+            assert 'program' not in reset and 'operationSpecs' not in reset
+            assert reset['mesh'] == mesh['mesh'] and reset['modelRevision'] == mesh['modelRevision']
+            assert reset['diameter'] == 3
+            assert all(not f['passes'] and not f['trajectory']['poses'] for f in reset['faces'])
+            with urllib.request.urlopen(root+'/') as r:
+                saved = r.read().decode()
+                assert '"operationTree":true' not in saved
+                assert 'id="clearTrajectory"' in saved
+            assert 'Model changed' in request('/reset-trajectory?revision=0',status=400)['error']
+            assert request('/operations?'+urllib.parse.urlencode(tree)) == operation_result
             step_job = request('/program?xmin=-2&ymin=-2&zmin=0&xmax=22&ymax=12&zmax=7&plunge=1')
             assert step_job['program']['includedFaces'] and not step_job['program']['collisions']
             auto = request('/auto-program?xmin=-2&ymin=-2&zmin=0&xmax=22&ymax=12&zmax=7&plunge=1&face=999&finishFaces=999')

@@ -1,6 +1,9 @@
 #include "operation_plan.h"
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
+#include <BRepAlgoAPI_Fuse.hxx>
+#include <BRepBuilderAPI_MakeFace.hxx>
+#include <BRepBuilderAPI_MakePolygon.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
 #include <BRepClass3d_SolidClassifier.hxx>
 #include <BRepOffsetAPI_MakeOffset.hxx>
@@ -14,6 +17,7 @@
 #include <functional>
 #include <gp_Cylinder.hxx>
 #include <gp_Pln.hxx>
+#include <set>
 #include <sstream>
 namespace milling {
 std::vector<Operation> buildRoughOperations(StockGrid &, const Options &,
@@ -170,6 +174,206 @@ Pass surfacePath(const TopoDS_Face &f, const Options &o,
   append(result, end, 1, o.feed, o);
   return result;
 }
+// Orthographic silhouette of the actual part, not its bounding rectangle.
+// Positive-Z triangles cover the projection of a closed solid, including
+// terraces/overhangs. Mesh approximation is the same 0.02 mm as validation.
+TopoDS_Face projectedPart(const Scene &scene) {
+  TopTools_ListOfShape arguments, tools;
+  int count = 0;
+  for (const auto &t : scene.mesh) {
+    if ((t.b - t.a).cross(t.c - t.a).z() <= 1e-10)
+      continue;
+    need(
+        ++count <= 2000,
+        "Part silhouette exceeds 2000 projected triangles; simplify the model");
+    BRepBuilderAPI_MakePolygon polygon;
+    for (auto p : {t.a, t.b, t.c})
+      polygon.Add(gp_Pnt(p.x(), p.y(), 0));
+    polygon.Close();
+    auto face = BRepBuilderAPI_MakeFace(polygon.Wire()).Face();
+    if (arguments.IsEmpty())
+      arguments.Append(face);
+    else
+      tools.Append(face);
+  }
+  need(!arguments.IsEmpty(), "Part has no usable XY silhouette");
+  TopoDS_Shape shape = arguments.First();
+  if (!tools.IsEmpty()) {
+    BRepAlgoAPI_Fuse fuse;
+    fuse.SetArguments(arguments);
+    fuse.SetTools(tools);
+    fuse.SetRunParallel(false);
+    fuse.Build();
+    need(fuse.IsDone(), "Cannot join part silhouette");
+    fuse.SimplifyResult(true, true);
+    shape = fuse.Shape();
+  }
+  std::vector<TopoDS_Face> result;
+  for (TopExp_Explorer e(shape, TopAbs_FACE); e.More(); e.Next())
+    result.push_back(TopoDS::Face(e.Current()));
+  need(result.size() == 1,
+       "Part projection has multiple outlines; select a separate part");
+  return result.front();
+}
+bool projectedInside(const Triangle &t, const V &p) {
+  auto side = [](const V &a, const V &b, const V &p) {
+    return (b.x() - a.x()) * (p.y() - a.y()) -
+           (b.y() - a.y()) * (p.x() - a.x());
+  };
+  double a = side(t.a, t.b, p), b = side(t.b, t.c, p), c = side(t.c, t.a, p);
+  return (a >= -1e-9 && b >= -1e-9 && c >= -1e-9) ||
+         (a <= 1e-9 && b <= 1e-9 && c <= 1e-9);
+}
+Pass roughFace(const Scene &scene, int id, const Options &o,
+               const StockSettings &stock, const OperationSpec &spec) {
+  V normal = V::Zero();
+  for (const auto &t : scene.mesh)
+    if (t.face == id)
+      normal += (t.b - t.a).cross(t.c - t.a);
+  need(normal.norm() > 1e-8,
+       "Selected face needs subdivision for directional roughing");
+  normal.normalize();
+  need(normal.z() >= -1e-6, "Downward surface requires another setup");
+  Q rotation = Q::FromTwoVectors(normal, V::UnitZ());
+  Scene local = scene;
+  std::vector<Triangle> region;
+  for (auto &t : local.mesh) {
+    t.a = rotation * t.a;
+    t.b = rotation * t.b;
+    t.c = rotation * t.c;
+    if (t.face == id) {
+      V n = (t.b - t.a).cross(t.c - t.a);
+      need(n.normalized().z() > .2,
+           "Selected face needs subdivision for directional roughing");
+      region.push_back(t);
+    }
+  }
+  auto settings = stock;
+  settings.low = V::Constant(1e100);
+  settings.high = V::Constant(-1e100);
+  settings.stepDown = spec.depth;
+  settings.allowance = spec.allowance;
+  for (double x : {stock.low.x(), stock.high.x()})
+    for (double y : {stock.low.y(), stock.high.y()})
+      for (double z : {stock.low.z(), stock.high.z()}) {
+        V p = rotation * V(x, y, z);
+        settings.low = settings.low.cwiseMin(p);
+        settings.high = settings.high.cwiseMax(p);
+      }
+  settings.validate(o);
+  StockGrid grid(local, settings, o);
+  size_t work = 0;
+  size_t selected = 0;
+  for (int y = 0; y < grid.ny; ++y)
+    for (int x = 0; x < grid.nx; ++x) {
+      V p = grid.center(x, y);
+      bool inside = false;
+      for (auto &t : region) {
+        need(++work < 10000000, "Selected face footprint budget exceeded");
+        if (projectedInside(t, p)) {
+          inside = true;
+          break;
+        }
+      }
+      if (!inside)
+        grid.target[size_t(y) * grid.nx + x] = settings.high.z();
+      else
+        ++selected;
+    }
+  need(selected > 0, "Selected face has no roughable area for this setup");
+  auto layers = buildRoughOperations(grid, o, settings);
+  Pass path;
+  for (auto &layer : layers)
+    for (auto p : layer.path.poses) {
+      p.p = rotation.conjugate() * p.p;
+      p.n = rotation.conjugate() * p.n;
+      p.q = rotation.conjugate() * p.q;
+      append(path, p, p.motion, stock.roughFeed, o);
+    }
+  need(!path.poses.empty(),
+       "Selected face has no roughable area for this setup");
+  Pass result;
+  Pose start = path.poses.front();
+  start.p.z() = std::max(start.p.z(), stock.high.z() +
+                                          std::hypot(o.length, o.diameter / 2) +
+                                          o.clearance);
+  append(result, start, 2, stock.roughFeed, o);
+  for (auto &p : path.poses)
+    append(result, p, p.motion == 2 ? 3 : p.motion, stock.roughFeed, o);
+  Pose end = result.poses.back();
+  end.p.z() = std::max(end.p.z(), start.p.z());
+  append(result, end, 1, stock.roughFeed, o);
+  return result;
+}
+Pass contourPath(const TopoDS_Face &f, const Options &o,
+                 const StockSettings &stock, const OperationSpec &s) {
+  need(std::abs(s.bottom - stock.low.z()) < 1e-6,
+       "Contour bottom must equal stock Z zero (stock minimum Z)");
+  Operation op;
+  double r = o.diameter / 2, safe = stock.high.z() + o.clearance;
+
+  need(horizontal(f), "Contour requires a horizontal planar face");
+  auto ws = wires(f);
+  need(s.wire == 1 && !ws.empty(),
+       "External contour uses the outer boundary (contour 1)");
+  auto original = sampleWire(ws[0], o);
+  std::vector<V> boundary;
+  for (double sign : {-1., 1.}) {
+    BRepOffsetAPI_MakeOffset offset(ws[0], GeomAbs_Arc);
+    offset.Perform(sign * (r + s.allowance + (s.face == 0 ? .03 : .01)));
+    if (!offset.IsDone())
+      continue;
+    std::vector<TopoDS_Wire> candidates;
+    for (TopExp_Explorer e(offset.Shape(), TopAbs_WIRE); e.More(); e.Next())
+      candidates.push_back(TopoDS::Wire(e.Current()));
+    if (candidates.size() != 1)
+      continue;
+    auto candidate = sampleWire(candidates[0], o);
+    if (area(candidate) > area(original) + 1e-6)
+      boundary = std::move(candidate);
+  }
+  need(!boundary.empty(), "Cannot construct one outward offset "
+                          "contour; subdivide geometry");
+  int layers = std::max(1, int(std::ceil((s.top - s.bottom) / s.depth)));
+  need(size_t(layers) * boundary.size() < 80000,
+       "Contour layer budget exceeded");
+  double total = 0;
+  std::vector<double> distance{0};
+  for (size_t k = 1; k < boundary.size(); ++k) {
+    total += (boundary[k] - boundary[k - 1]).norm();
+    distance.push_back(total);
+  }
+  need(total > 1e-6, "Empty contour");
+  V p = boundary.front();
+  p.z() = safe;
+  append(op.path, at(p), 2, o.feed, o);
+  p.z() = s.top;
+  append(op.path, at(p), 4, std::min(2., o.feed), o);
+  for (int layer = 1; layer <= layers; ++layer) {
+    double upper = std::max(s.bottom, s.top - (layer - 1) * s.depth),
+           lower = std::max(s.bottom, s.top - layer * s.depth);
+    if (!s.spiral) {
+      p = boundary.front();
+      p.z() = lower;
+      append(op.path, at(p), 4, std::min(2., o.feed), o);
+    }
+    for (size_t k = 0; k < boundary.size(); ++k) {
+      p = boundary[k];
+      p.z() = s.spiral ? upper - (upper - lower) * distance[k] / total : lower;
+      append(op.path, at(p), 0, o.feed, o);
+    }
+  }
+  if (s.spiral)
+    for (auto q : boundary) {
+      q.z() = s.bottom;
+      append(op.path, at(q), 0, o.feed, o);
+    }
+  p = op.path.poses.back().p;
+  p.z() = safe;
+  append(op.path, at(p), 1, o.feed, o);
+
+  return op.path;
+}
 } // namespace
 std::string withOperationCatalog(std::string json, const Model &m) {
   auto fs = faces(m);
@@ -259,6 +463,7 @@ MachiningProgram planOperations(const Model &m, Scene &scene, const Options &o,
   const double r = o.diameter / 2, depth = stock.high.z() - stock.low.z(),
                safe = stock.high.z() + std::hypot(o.length, r) + o.clearance;
   bool roughDone = false;
+  std::set<int> roughFaces;
   for (size_t index = 0; index < specs.size(); ++index) {
     const auto &s = specs[index];
     try {
@@ -275,7 +480,7 @@ MachiningProgram planOperations(const Model &m, Scene &scene, const Options &o,
       Operation op;
       op.name = std::to_string(index + 1) + ". " + s.kind;
       op.face = s.face;
-      op.stage = s.kind == "rough" ? 1 : 2;
+      op.stage = (s.kind == "rough" || s.kind == "face_rough") ? 1 : 2;
       if (s.kind == "rough") {
         need(s.face == 0, "Bulk roughing geometry must be the whole solid");
         auto settings = stock;
@@ -290,18 +495,43 @@ MachiningProgram planOperations(const Model &m, Scene &scene, const Options &o,
         roughDone = true;
         out.roughRemaining = grid.remaining;
         out.excess = grid.excessVolume(0);
+      } else if (s.kind == "contour") {
+        need(s.face >= 0 && s.face <= int(fs.size()),
+             "Select a valid face from the current model");
+        auto outline = s.face ? fs[size_t(s.face - 1)] : projectedPart(scene);
+        op.path = contourPath(outline, o, stock, s);
+        if (s.face)
+          out.includedFaces.push_back(s.face);
       } else {
         need(s.face > 0 && s.face <= int(fs.size()),
              "Select a valid face from the current model");
         auto f = fs[size_t(s.face - 1)];
         BRepAdaptor_Surface surface(f);
-        if (s.kind == "surface") {
-          need(roughDone,
-               "Normal finishing requires bulk roughing earlier in this tree");
+        std::string strategy = s.kind;
+        bool hole = false;
+        if (surface.GetType() == GeomAbs_Cylinder &&
+            std::abs(surface.Cylinder().Axis().Direction().Z()) > 1 - 1e-8) {
+          double a, b, c, d;
+          BRepTools::UVBounds(f, a, b, c, d);
+          auto p = evaluate(f, (a + b) / 2, (c + d) / 2, o);
+          V center = vec(surface.Cylinder().Location());
+          hole = p.n.dot(V(p.p.x() - center.x(), p.p.y() - center.y(), 0)) < 0;
+        }
+        if (strategy == "face_finish")
+          strategy = hole ? "bore" : horizontal(f) ? "face" : "surface";
+        if (strategy == "face_rough" && hole)
+          strategy = "bore";
+        if (strategy == "face_rough") {
+          op.path = roughFace(scene, s.face, o, stock, s);
+          roughFaces.insert(s.face);
+        } else if (strategy == "surface") {
+          need(roughDone || roughFaces.count(s.face),
+               "Normal finishing requires roughing this face or the whole "
+               "solid earlier in this tree");
           need(s.allowance == 0,
                "Normal finishing currently requires zero allowance");
           op.path = surfacePath(f, o, stock);
-        } else if (s.kind == "face" || s.kind == "pocket") {
+        } else if (strategy == "face" || strategy == "pocket") {
           need(horizontal(f),
                "Face / pocket operation requires a horizontal planar floor");
           Options local = o;
@@ -335,7 +565,7 @@ MachiningProgram planOperations(const Model &m, Scene &scene, const Options &o,
               a.z() = safe;
               append(op.path, at(a), 1, o.feed, o);
             }
-        } else if (s.kind == "bore") {
+        } else if (strategy == "bore") {
           need(surface.GetType() == GeomAbs_Cylinder,
                "Hole operation requires a cylindrical wall");
           auto cylinder = surface.Cylinder();
@@ -388,71 +618,10 @@ MachiningProgram planOperations(const Model &m, Scene &scene, const Options &o,
           p = op.path.poses.back().p;
           p.z() = safe;
           append(op.path, at(p), 1, o.feed, o);
-        } else if (s.kind == "contour") {
-          need(horizontal(f), "Contour requires a horizontal planar face");
-          auto ws = wires(f);
-          need(s.wire == 1 && !ws.empty(),
-               "External contour uses the outer boundary (contour 1)");
-          auto original = sampleWire(ws[0], o);
-          std::vector<V> boundary;
-          for (double sign : {-1., 1.}) {
-            BRepOffsetAPI_MakeOffset offset(ws[0], GeomAbs_Arc);
-            offset.Perform(sign * (r + s.allowance + .01));
-            if (!offset.IsDone())
-              continue;
-            std::vector<TopoDS_Wire> candidates;
-            for (TopExp_Explorer e(offset.Shape(), TopAbs_WIRE); e.More();
-                 e.Next())
-              candidates.push_back(TopoDS::Wire(e.Current()));
-            if (candidates.size() != 1)
-              continue;
-            auto candidate = sampleWire(candidates[0], o);
-            if (area(candidate) > area(original) + 1e-6)
-              boundary = std::move(candidate);
-          }
-          need(!boundary.empty(), "Cannot construct one outward offset "
-                                  "contour; subdivide geometry");
-          int layers =
-              std::max(1, int(std::ceil((s.top - s.bottom) / s.depth)));
-          need(size_t(layers) * boundary.size() < 80000,
-               "Contour layer budget exceeded");
-          double total = 0;
-          std::vector<double> distance{0};
-          for (size_t k = 1; k < boundary.size(); ++k) {
-            total += (boundary[k] - boundary[k - 1]).norm();
-            distance.push_back(total);
-          }
-          need(total > 1e-6, "Empty contour");
-          V p = boundary.front();
-          p.z() = safe;
-          append(op.path, at(p), 2, o.feed, o);
-          p.z() = s.top;
-          append(op.path, at(p), 4, std::min(2., o.feed), o);
-          for (int layer = 1; layer <= layers; ++layer) {
-            double upper = std::max(s.bottom, s.top - (layer - 1) * s.depth),
-                   lower = std::max(s.bottom, s.top - layer * s.depth);
-            if (!s.spiral) {
-              p = boundary.front();
-              p.z() = lower;
-              append(op.path, at(p), 4, std::min(2., o.feed), o);
-            }
-            for (size_t k = 0; k < boundary.size(); ++k) {
-              p = boundary[k];
-              p.z() = s.spiral ? upper - (upper - lower) * distance[k] / total
-                               : lower;
-              append(op.path, at(p), 0, o.feed, o);
-            }
-          }
-          if (s.spiral)
-            for (auto q : boundary) {
-              q.z() = s.bottom;
-              append(op.path, at(q), 0, o.feed, o);
-            }
-          p = op.path.poses.back().p;
-          p.z() = safe;
-          append(op.path, at(p), 1, o.feed, o);
         } else
           throw std::runtime_error("Unknown operation type");
+        if (s.kind == "face_rough")
+          roughFaces.insert(s.face);
         out.includedFaces.push_back(s.face);
       }
       need(!op.path.poses.empty(),
@@ -465,6 +634,10 @@ MachiningProgram planOperations(const Model &m, Scene &scene, const Options &o,
         if ((p.motion == 0 || p.motion == 4) && p.n.z() > .999 &&
             a.n.z() > .999)
           grid.remove(a.p, p.p, r, std::max(a.p.z(), p.p.z()));
+      }
+      if (op.stage == 1) {
+        out.roughRemaining = grid.remaining;
+        out.excess = grid.excessVolume(0);
       }
       out.operations.push_back(std::move(op));
     } catch (const std::exception &e) {
@@ -498,12 +671,14 @@ MachiningProgram planOperations(const Model &m, Scene &scene, const Options &o,
   }
   grid.remaining.assign(grid.remaining.size(), stock.high.z());
   out.notices.push_back(
-      "Hole radial mesh reserve: 0.03 mm; external contour reserve: 0.01 mm. "
+      "Hole radial mesh reserve: 0.03 mm; selected-face contour reserve: 0.01 "
+      "mm; projected part contour reserve: 0.03 mm. "
       "These are explicit unremoved allowances, not hidden material removal.");
   out.notices.push_back(
       "User operation order. Stock replay starts from the original block; no "
       "hidden roughing or face selection. RoughRemaining is the planning "
-      "height envelope after selected operations.");
+      "height envelope after selected operations (voxel replay for local face "
+      "roughing).");
   // Replay every operation in user order against the original stock. Voxels
   // are centre samples (bounded resolution), with CAD solid classification as
   // an immutable target mask. Air moves never silently remove material.
@@ -575,6 +750,10 @@ MachiningProgram planOperations(const Model &m, Scene &scene, const Options &o,
         }
     return hit;
   };
+  const bool selectedRoughing =
+      std::any_of(specs.begin(), specs.end(), [](const OperationSpec &s) {
+        return s.kind == "face_rough";
+      });
   for (size_t k = 0; k < out.trajectory.poses.size(); ++k) {
     replayStage = out.stage[k];
     auto &p = out.trajectory.poses[k];
@@ -591,6 +770,22 @@ MachiningProgram planOperations(const Model &m, Scene &scene, const Options &o,
       bool hit = replay(v, p.motion == 0 || p.motion == 4);
       p.sweepCollision |= hit;
       out.stockCollisions |= hit;
+    }
+    // Local face roughing may tilt the tool: a vertical height-field planning
+    // update cannot represent that removal. Snapshot the actual replay instead.
+    if (selectedRoughing && replayStage == 1 &&
+        (k + 1 == out.stage.size() || out.stage[k + 1] != 1)) {
+      out.roughRemaining.assign(grid.remaining.size(), cfg.stock.low.z());
+      out.excess = 0;
+      for (int z = 0; z < nz; ++z)
+        for (size_t c = 0; c < grid.remaining.size(); ++c)
+          if (material[size_t(z) * grid.remaining.size() + c]) {
+            out.roughRemaining[c] = std::max(
+                out.roughRemaining[c],
+                std::min(cfg.stock.high.z(), cfg.stock.low.z() + (z + 1) * dz));
+            if (cfg.stock.low.z() + (z + .5) * dz > grid.target[c] + .03)
+              out.excess += voxelVolume;
+          }
     }
   }
   out.finalRemaining.assign(grid.remaining.size(), cfg.stock.low.z());

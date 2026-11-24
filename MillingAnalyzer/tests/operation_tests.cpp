@@ -1,6 +1,7 @@
 #include "operation_plan.h"
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
+#include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakePolygon.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
@@ -120,6 +121,76 @@ int main(int argc, char **argv) {
       }
     check(fractional && prior == 0,
           "spiral has continuous pitch and full bottom lap");
+    // A whole-part contour must retain the lower terrace, not use the top face.
+    Model terrace{
+        BRepAlgoAPI_Fuse(
+            box.shape, BRepPrimAPI_MakeBox(gp_Pnt(5, 5, 4), 10, 10, 2).Shape())
+            .Shape(),
+        "mm"};
+    auto ts = analyze(terrace, preview);
+    auto wholeContour = contour;
+    wholeContour.face = 0;
+    auto exterior = planOperations(terrace, ts, o, stock, {wholeContour});
+    check(!exterior.collisions && !exterior.stockCollisions,
+          "whole-part silhouette protects lower terrace");
+    if (argc == 3 && std::string(argv[1]) == "--example") {
+      auto dir = std::filesystem::u8path(argv[2]);
+      std::ofstream(dir / "external-helix.json") << withOperationCatalog(
+          operationPlanJson(ts, exterior, {wholeContour}), terrace);
+      std::ofstream(dir / "external-helix.poses.csv") << programCsv(exterior);
+      STEPControl_Writer writer;
+      check(writer.Transfer(terrace.shape, STEPControl_AsIs) ==
+                IFSelect_RetDone,
+            "contour fixture transfer");
+      check(writer.Write((dir / "terraced-part.step").string().c_str()) ==
+                IFSelect_RetDone,
+            "contour fixture write");
+    }
+    double lastZ = wholeContour.top;
+    for (auto &p : exterior.operations.front().path.poses) {
+      check((p.n - V::UnitZ()).norm() < 1e-9 &&
+                p.q.angularDistance(Q::Identity()) < 1e-9,
+            "contour keeps tool Z parallel with no axial rotation");
+      if (p.motion != 0)
+        continue;
+      double dx = std::max({-p.p.x(), p.p.x() - 20, 0.});
+      double dy = std::max({-p.p.y(), p.p.y() - 20, 0.});
+      check(std::hypot(dx, dy) >=
+                o.diameter / 2 + wholeContour.allowance + .019,
+            "every contour sample outside real part by tool radius");
+      check(p.p.z() <= lastZ + 1e-8, "whole-part helix always descends");
+      lastZ = p.p.z();
+    }
+    check(std::abs(lastZ - stock.low.z()) < 1e-9, "helix reaches stock base");
+    auto wrongBottom = wholeContour;
+    wrongBottom.bottom = 4;
+    rejects([&] { planOperations(terrace, ts, o, stock, {wrongBottom}); },
+            "selected upper face cannot silently stop contour above base");
+    auto shiftedStock = stock;
+    shiftedStock.low.z() = -1;
+    wholeContour.bottom = -1;
+    auto shifted = planOperations(box, scene, o, shiftedStock, {wholeContour});
+    double minZ = 1e9;
+    for (const auto &p : shifted.trajectory.poses)
+      minZ = std::min(minZ, p.p.z());
+    check(std::abs(minZ + 1) < 1e-8,
+          "stock zero is explicit, not assumed world zero");
+    OperationSpec selectedRough = rough;
+    selectedRough.kind = "face_rough";
+    selectedRough.face = horizontalFace(box, 4);
+    OperationSpec selectedFinish = face;
+    selectedFinish.kind = "face_finish";
+    auto selected =
+        planOperations(box, scene, o, stock, {selectedRough, selectedFinish});
+    check(selected.operations.size() == 2 &&
+              selected.operations[0].stage == 1 &&
+              selected.operations[1].stage == 2 && !selected.collisions &&
+              !selected.stockCollisions,
+          "selected planar face rough then automatic finish");
+    for (const auto &p : selected.operations[0].path.poses)
+      if (p.motion == 0)
+        check(p.p.x() > 0 && p.p.x() < 20 && p.p.y() > 0 && p.p.y() < 20,
+              "face roughing restricted to selected footprint");
     BRepBuilderAPI_MakePolygon polygon;
     for (auto xy : std::vector<V>{V(0, 0, 0), V(20, 0, 0), V(20, 8, 0),
                                   V(8, 8, 0), V(8, 20, 0), V(0, 20, 0)})
@@ -143,6 +214,16 @@ int main(int argc, char **argv) {
         followsNotch = true;
     check(followsNotch,
           "real L contour follows recess instead of bounding rectangle");
+    lc.face = 0;
+    auto wholeL = planOperations(lpart, ls, o, stock, {lc});
+    check(!wholeL.collisions && !wholeL.stockCollisions,
+          "projected concave whole-part contour clear");
+    followsNotch = false;
+    for (auto &p : wholeL.trajectory.poses)
+      if (p.motion == 0 && p.p.x() > 8 && p.p.x() < 15 && p.p.y() > 8 &&
+          p.p.y() < 15)
+        followsNotch = true;
+    check(followsNotch, "whole-part silhouette retains concavity");
     OperationSpec surface = face;
     surface.kind = "surface";
     surface.allowance = 0;
@@ -213,6 +294,16 @@ int main(int argc, char **argv) {
       check(!h.collisions && !h.stockCollisions,
             "through / blind hole clearing");
       check(h.finishRemoved > 100, "hole core removed");
+      auto autoHole = holeOp;
+      autoHole.kind = "face_rough";
+      auto holeRough = planOperations(hole, hs, o, stock, {autoHole});
+      check(!holeRough.collisions && !holeRough.stockCollisions &&
+                holeRough.operations.front().stage == 1,
+            "selected cylinder chooses hole roughing");
+      autoHole.kind = "face_finish";
+      auto holeFinish = planOperations(hole, hs, o, stock, {autoHole});
+      check(!holeFinish.collisions && !holeFinish.stockCollisions,
+            "selected cylinder chooses hole finishing");
       if (argc == 3 && std::string(argv[1]) == "--fixture" && bottom == 2) {
         STEPControl_Writer writer;
         check(writer.Transfer(hole.shape, STEPControl_AsIs) == IFSelect_RetDone,
@@ -268,6 +359,50 @@ int main(int argc, char **argv) {
         tilted |= p.n.z() < .99;
       }
     check(tilted, "curved surface varies tool orientation");
+    cr.kind = "face_rough";
+    cr.face = curvedFace;
+    cf.kind = "face_finish";
+    auto selectedCurved =
+        planOperations(curved, curvedScene, o, curvedStock, {cr, cf});
+    check(!selectedCurved.collisions && !selectedCurved.stockCollisions,
+          "selected Bezier roughing and normal finishing");
+    BRepBuilderAPI_MakePolygon slope;
+    for (auto p :
+         std::vector<V>{V(0, 0, 0), V(20, 0, 0), V(20, 0, 4), V(0, 0, 8)})
+      slope.Add(gp_Pnt(p.x(), p.y(), p.z()));
+    slope.Close();
+    Model wedge{
+        BRepPrimAPI_MakePrism(BRepBuilderAPI_MakeFace(slope.Wire()).Face(),
+                              gp_Vec(0, 20, 0))
+            .Shape(),
+        "mm"};
+    auto wedgeScene = analyze(wedge, preview);
+    auto wedgeStock = stock;
+    wedgeStock.high.z() = 10;
+    auto wr = selectedRough;
+    for (const auto &t : wedgeScene.mesh) {
+      V n = (t.b - t.a).cross(t.c - t.a).normalized();
+      if (n.z() > .5 && n.z() < .999)
+        wr.face = t.face;
+    }
+    wr.top = 10;
+    auto wf = wr;
+    wf.kind = "face_finish";
+    wf.allowance = 0;
+    auto wedgeProgram =
+        planOperations(wedge, wedgeScene, o, wedgeStock, {wr, wf});
+    check(!wedgeProgram.collisions && !wedgeProgram.stockCollisions,
+          "inclined face local roughing then normal finish");
+    check(*std::min_element(wedgeProgram.roughRemaining.begin(),
+                            wedgeProgram.roughRemaining.end()) < 9.5,
+          "tilted roughing snapshot comes from removed voxels");
+    int underside = 0;
+    for (const auto &t : wedgeScene.mesh)
+      if ((t.b - t.a).cross(t.c - t.a).normalized().z() < -.999)
+        underside = t.face;
+    wr.face = underside;
+    rejects([&] { planOperations(wedge, wedgeScene, o, wedgeStock, {wr}); },
+            "inaccessible lower face requires another setup");
     check(withOperationCatalog(json(scene), box).find("operationCatalog") !=
               std::string::npos,
           "catalog produced");

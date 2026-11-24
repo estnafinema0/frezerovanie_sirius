@@ -3,7 +3,8 @@
 namespace milling {
 // Separate offline planner. IDs refer to the current imported B-rep only.
 struct OperationSpec {
-  std::string kind; // rough, face, pocket, bore, surface, contour
+  std::string kind; // rough, face_rough, face_finish, face, pocket, bore,
+                    // surface, contour
   int face = 0, wire = 1;
   bool confirmed = false, spiral = false;
   double top = 0, bottom = 0, depth = 1, allowance = 0;
