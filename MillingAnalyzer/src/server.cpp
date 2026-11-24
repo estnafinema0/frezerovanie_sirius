@@ -311,9 +311,15 @@ int serve(bool openBrowser) {
             r.path == root + "/program-demo")
           ++modelRevision;
         auto nextExports = faceExports(result);
-        if (!programExport.empty())
+        if (!programExport.empty()) {
+          // A face view must not hide a program-level stock/collision
+          // rejection.
+          if (!programError.empty())
+            for (auto &entry : nextExports)
+              entry.second.error = programError;
           nextExports[0] = {
               {}, std::move(programExport), std::move(programError)};
+        }
         egm.invalidate();
         ++trajectoryRevision;
         data = revisionJson(std::move(data), modelRevision);

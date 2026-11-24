@@ -189,10 +189,12 @@ Plan preflight(const std::string &csv) {
       need(a[2] == double(plan.poses.size()),
            "Sample IDs must be consecutive from zero");
       if (program)
-        need((a[0] == 1 || a[0] == 2) && a[1] >= 1 && a[1] == std::floor(a[1]),
+        need((a[0] == 1 || a[0] == 2) && a[1] >= 1 && a[1] <= 200000 &&
+                 a[1] == std::floor(a[1]),
              "Invalid stage/operation");
       else {
-        need(a[0] == face && face >= 1 && face == std::floor(face) && a[1] == 0,
+        need(a[0] == face && face >= 1 && face <= 1000 &&
+                 face == std::floor(face) && a[1] == 0,
              "Select one complete face, pass_id=0");
         need(std::abs(V(a[10], a[11], a[12]).norm() - 1) < 1e-6,
              "Invalid surface normal");

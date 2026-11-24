@@ -15,7 +15,10 @@ import urllib.request
 sys.path.insert(0, str(pathlib.Path(__file__).parents[2] / 'experiments' / 'robotstudio_pose_force'))
 from test_loopback import decode, integer, message, real
 
-exe, fixture = sys.argv[1:]
+exe, fixture = sys.argv[1:3]
+export_dir = pathlib.Path(sys.argv[3]) if len(sys.argv) > 3 else None
+if export_dir:
+    export_dir.mkdir(parents=True, exist_ok=True)
 def pose_bytes(p, q):
     return message(1, b''.join(real(i+1,v) for i,v in enumerate(p))) + message(2,b''.join(real(i+1,v) for i,v in enumerate(q)))
 def feedback(seq, pose):
@@ -28,7 +31,9 @@ def rotate(q,p): return qmul(qmul(q,[0]+p),conjugate(q))[1:]
 
 with tempfile.TemporaryDirectory() as tmp:
     step=pathlib.Path(tmp)/'Пластина с пробелами.STP'
-    subprocess.run([fixture,'--fixture',str(step)],check=True,stdout=subprocess.DEVNULL)
+    raw=pathlib.Path(tmp)/'fixture.step'
+    subprocess.run([fixture,'--fixture',str(raw)],check=True,stdout=subprocess.DEVNULL)
+    raw.rename(step)  # Fixture CLI has narrow argv on Windows; upload still uses a Unicode path.
     with tempfile.TemporaryFile(mode='w+') as errors:
         proc=subprocess.Popen([exe,'--serve','--no-open'],stdout=subprocess.PIPE,stderr=errors,text=True)
         try:
@@ -81,6 +86,10 @@ with tempfile.TemporaryDirectory() as tmp:
             prepared=api('/egm/prepare',dict(face=floor,revision=scene['trajectoryRevision']))
             assert prepared['state']=='prepared' and not prepared['active'] and prepared['sent']==0
             text=api('/egm/download',dict(job=prepared['job']),method='GET')
+            if export_dir:
+                (export_dir/'flat.step').write_bytes(step.read_bytes())
+                (export_dir/'flat.poses.csv').write_text(text, encoding='utf-8')
+                (export_dir/'flat-parameters.json').write_text(json.dumps(dict(face=floor,diameter=2.5,feed=20,spacing=2,step=2,clearance=2,length=8,preflight=prepared),indent=2),encoding='utf-8')
             rows=list(csv.DictReader(io.StringIO(text)));assert len(rows)==prepared['poses']
             assert all(r['pass_id']=='0' and r['face_id']==str(floor) for r in rows)
             job=prepared['job']
@@ -167,6 +176,8 @@ with tempfile.TemporaryDirectory() as tmp:
             pre=api('/egm/prepare',dict(face=0,revision=program['trajectoryRevision']))
             data=api('/egm/download',dict(job=pre['job']),method='GET')
             assert data.startswith('stage,operation,') and ',4,0,0\n' in data
+            if export_dir:
+                (export_dir/'rough-program.poses.csv').write_text(data,encoding='utf-8')
             # Curved Bezier model sends changing tool orientation through the same path.
             api('/demo')
             curved=api('/calculate',dict(face=1,feed=10,spacing=2,step=1,clearance=2,length=8))
@@ -182,6 +193,10 @@ with tempfile.TemporaryDirectory() as tmp:
                 assert changed,'Curved surface orientation was not transmitted'
                 api('/egm/stop');exchange(peer,seq,pose,port)
             wait_state({'stopped'})
+            concave=api('/demo',dict(kind='bowl'))
+            assert any(p['collision'] or p['sweepCollision'] for p in concave['faces'][0]['trajectory']['poses'])
+            refused=api('/egm/prepare',dict(face=1,revision=concave['trajectoryRevision']),body=text.encode(),expected=400)
+            assert 'collision' in refused['error'].lower(), 'Client body cannot clear server-owned collision flags'
             print('STEP -> CAM -> canonical CSV -> protobuf -> UDP: passed (XYZ, rotating quaternion, plunge=4, lifecycle and rejection). RobotStudio not used.')
         finally:
             proc.terminate();proc.wait(timeout=10)

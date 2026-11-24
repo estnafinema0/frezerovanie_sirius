@@ -96,6 +96,8 @@ int main() {
                   .scope == 8,
           "whole-face contract");
     reject(face + "8,1,0,0,0,0,1,0,0,0,0,0,1,0,0,0,0\n", "complete face");
+    reject(face + "100000000000000000000,0,0,0,0,0,1,0,0,0,0,0,1,0,0,0,0\n",
+           "complete face");
     reject(face + "8,0,0,0,0,0,1,0,0,0,0,0,2,0,0,0,0\n", "normal");
     struct Comma : std::numpunct<char> {
       char do_decimal_point() const override { return ','; }
