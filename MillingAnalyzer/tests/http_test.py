@@ -64,6 +64,16 @@ with tempfile.TemporaryDirectory() as tmp:
                 assert 'id="clearTrajectory"' in saved
             assert 'Model changed' in request('/reset-trajectory?revision=0',status=400)['error']
             assert request('/operations?'+urllib.parse.urlencode(tree)) == operation_result
+            face_tree = {k:v for k,v in tree.items() if not k.startswith('op1.')}
+            face_tree.update(count=1, zmax=9)
+            face_tree.update({'op0.kind':'face_rough','op0.top':9,'op0.bottom':0,'op0.optimize':0})
+            old_rough = request('/operations?'+urllib.parse.urlencode(face_tree))
+            assert old_rough['operationSpecs'][0]['optimize'] is False
+            face_tree['op0.optimize']=1
+            new_rough = request('/operations?'+urllib.parse.urlencode(face_tree))
+            assert new_rough['operationSpecs'][0]['optimize'] is True
+            assert new_rough['program']['trajectory']['poses'][-1]['t'] < old_rough['program']['trajectory']['poses'][-1]['t']
+            assert not new_rough['program']['collisions'] and not new_rough['program']['stockCollisions']
             step_job = request('/program?xmin=-2&ymin=-2&zmin=0&xmax=22&ymax=12&zmax=7&plunge=1')
             assert step_job['program']['includedFaces'] and not step_job['program']['collisions']
             auto = request('/auto-program?xmin=-2&ymin=-2&zmin=0&xmax=22&ymax=12&zmax=7&plunge=1&face=999&finishFaces=999')

@@ -191,6 +191,80 @@ int main(int argc, char **argv) {
       if (p.motion == 0)
         check(p.p.x() > 0 && p.p.x() < 20 && p.p.y() > 0 && p.p.y() < 20,
               "face roughing restricted to selected footprint");
+    // Compare identical stock/tool/face against the retained legacy route.
+    Model strip{BRepPrimAPI_MakeBox(20, 8, 2).Shape(), "mm"};
+    auto stripScene = analyze(strip, preview);
+    auto stripStock = stock;
+    stripStock.high = V(22, 10, 10);
+    auto sr = selectedRough;
+    sr.face = horizontalFace(strip, 2);
+    sr.top = 10;
+    sr.optimize = false;
+    auto baselineRough = planOperations(strip, stripScene, o, stripStock, {sr});
+    sr.optimize = true;
+    auto optimizedRough =
+        planOperations(strip, stripScene, o, stripStock, {sr});
+    check(!optimizedRough.collisions && !optimizedRough.stockCollisions,
+          "optimized interlayer links checked against target and stock");
+    check(optimizedRough.trajectory.poses.back().t <
+              .9 * baselineRough.trajectory.poses.back().t,
+          "optimized strip is at least ten percent faster at same feed");
+    for (size_t i = 0; i < baselineRough.finalRemaining.size(); ++i)
+      check(optimizedRough.finalRemaining[i] <=
+                baselineRough.finalRemaining[i] + 1e-8,
+            "optimization leaves no additional stock column");
+    auto distance = [](const Pass &p, bool air) {
+      double d = 0;
+      for (size_t k = 1; k < p.poses.size(); ++k)
+        if (!air || (p.poses[k].motion != 0 && p.poses[k].motion != 4))
+          d += (p.poses[k].p - p.poses[k - 1].p).norm();
+      return d;
+    };
+    std::cout << "ROUGH benchmark old/new: seconds "
+              << baselineRough.trajectory.poses.back().t << " / "
+              << optimizedRough.trajectory.poses.back().t << "; length "
+              << distance(baselineRough.trajectory, false) << " / "
+              << distance(optimizedRough.trajectory, false) << "; air "
+              << distance(baselineRough.trajectory, true) << " / "
+              << distance(optimizedRough.trajectory, true) << "\n";
+    for (const auto &n : optimizedRough.notices)
+      if (n.find("Черновая грани") != std::string::npos)
+        std::cout << n << "\n";
+    if (argc == 3 && std::string(argv[1]) == "--example") {
+      auto dir = std::filesystem::u8path(argv[2]);
+      std::ofstream(dir / "rough-before.poses.csv")
+          << programCsv(baselineRough);
+      std::ofstream(dir / "rough-optimized.poses.csv")
+          << programCsv(optimizedRough);
+      std::ofstream(dir / "rough-optimized.json") << withOperationCatalog(
+          operationPlanJson(stripScene, optimizedRough, {sr}), strip);
+      STEPControl_Writer writer;
+      check(writer.Transfer(strip.shape, STEPControl_AsIs) == IFSelect_RetDone,
+            "rough fixture transfer");
+      check(writer.Write((dir / "rough-strip.step").string().c_str()) ==
+                IFSelect_RetDone,
+            "rough fixture write");
+    }
+    auto islandStock = stock;
+    islandStock.high.z() = 10;
+    auto islandRough = selectedRough;
+    islandRough.face = horizontalFace(terrace, 4);
+    islandRough.top = 10;
+    islandRough.optimize = false;
+    auto islandBefore =
+        planOperations(terrace, ts, o, islandStock, {islandRough});
+    islandRough.optimize = true;
+    auto islandAfter =
+        planOperations(terrace, ts, o, islandStock, {islandRough});
+    check(!islandAfter.collisions && !islandAfter.stockCollisions,
+          "optimized links cannot cross a protected island");
+    check(islandAfter.trajectory.poses.back().t <=
+              islandBefore.trajectory.poses.back().t + 1e-7,
+          "island optimization cannot regress time");
+    for (size_t k = 0; k < islandBefore.finalRemaining.size(); ++k)
+      check(islandAfter.finalRemaining[k] <=
+                islandBefore.finalRemaining[k] + 1e-7,
+            "island stock coverage retained");
     BRepBuilderAPI_MakePolygon polygon;
     for (auto xy : std::vector<V>{V(0, 0, 0), V(20, 0, 0), V(20, 8, 0),
                                   V(8, 8, 0), V(8, 20, 0), V(0, 20, 0)})
@@ -366,6 +440,16 @@ int main(int argc, char **argv) {
         planOperations(curved, curvedScene, o, curvedStock, {cr, cf});
     check(!selectedCurved.collisions && !selectedCurved.stockCollisions,
           "selected Bezier roughing and normal finishing");
+    cr.optimize = false;
+    auto curvedBefore =
+        planOperations(curved, curvedScene, o, curvedStock, {cr});
+    cr.optimize = true;
+    auto curvedAfter =
+        planOperations(curved, curvedScene, o, curvedStock, {cr});
+    check(!curvedAfter.collisions && !curvedAfter.stockCollisions &&
+              curvedAfter.trajectory.poses.back().t <=
+                  curvedBefore.trajectory.poses.back().t + 1e-7,
+          "curved rough optimization does not regress time or validation");
     BRepBuilderAPI_MakePolygon slope;
     for (auto p :
          std::vector<V>{V(0, 0, 0), V(20, 0, 0), V(20, 0, 4), V(0, 0, 8)})

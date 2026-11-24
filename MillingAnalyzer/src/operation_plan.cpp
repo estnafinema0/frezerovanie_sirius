@@ -224,8 +224,116 @@ bool projectedInside(const Triangle &t, const V &p) {
   return (a >= -1e-9 && b >= -1e-9 && c >= -1e-9) ||
          (a <= 1e-9 && b <= 1e-9 && c <= 1e-9);
 }
+double roughSeconds(const Pass &p, double feed) {
+  double total = 0;
+  for (size_t i = 1; i < p.poses.size(); ++i)
+    total += (p.poses[i].p - p.poses[i - 1].p).norm() /
+             (p.poses[i].motion == 4 ? std::min(2., feed) : feed);
+  return total;
+}
+// Preserve every cutting polyline from the proven raster. Only reorder/reverse
+// these polylines and replace their links after checking the full swept XY
+// footprint against the target and the evolving stock. No shortcut through
+// cuts.
+Pass optimizeRoughLinks(const std::vector<Operation> &layers, StockGrid &grid,
+                        const Options &o, const StockSettings &s) {
+  Pass result;
+  const double r = o.diameter / 2, safe = s.high.z() + o.clearance;
+  size_t work = 0;
+  auto clear = [&](const V &a, const V &b, double z) {
+    return grid.targetClear(a, b, r, z) &&
+           grid.engagement(a, b, r, z) <= s.stepDown + 1e-8;
+  };
+  for (const auto &layer : layers) {
+    std::vector<std::vector<V>> runs;
+    bool active = false;
+    for (size_t k = 1; k < layer.path.poses.size(); ++k) {
+      const auto &p = layer.path.poses[k];
+      if (p.motion != 0) {
+        active = false;
+        continue;
+      }
+      if (!active) {
+        runs.push_back({layer.path.poses[k - 1].p});
+        active = true;
+      }
+      runs.back().push_back(p.p);
+    }
+    std::vector<bool> done(runs.size(), false);
+    for (size_t remaining = runs.size(); remaining; --remaining) {
+      size_t best = 0;
+      bool reverse = false;
+      double cost = 1e100;
+      for (size_t i = 0; i < runs.size(); ++i)
+        if (!done[i])
+          for (bool backwards : {false, true}) {
+            need(++work <= 1000000, "Rough link search budget exceeded");
+            V start = backwards ? runs[i].back() : runs[i].front();
+            double candidate = 0;
+            if (!result.poses.empty()) {
+              V p = result.poses.back().p, down = p;
+              down.z() = start.z();
+              bool linked = clear(p, start, start.z());
+              candidate = linked
+                              ? (p - down).norm() / std::min(2., s.roughFeed) +
+                                    (down - start).norm() / s.roughFeed
+                              : (2 * safe - p.z() - start.z() +
+                                 (p - start).head<2>().norm()) /
+                                    s.roughFeed;
+            }
+            if (candidate < cost) {
+              cost = candidate;
+              best = i;
+              reverse = backwards;
+            }
+          }
+      done[best] = true;
+      auto &run = runs[best];
+      if (reverse)
+        std::reverse(run.begin(), run.end());
+      V start = run.front();
+      bool linked = !result.poses.empty() &&
+                    clear(result.poses.back().p, start, start.z());
+      if (linked) {
+        V p = result.poses.back().p, down = p;
+        down.z() = start.z();
+        append(result, at(down), 4, std::min(2., s.roughFeed), o);
+        grid.remove(p, down, r, start.z());
+        append(result, at(start), 0, s.roughFeed, o);
+        grid.remove(down, start, r, start.z());
+      } else {
+        if (!result.poses.empty()) {
+          V p = result.poses.back().p;
+          p.z() = safe;
+          append(result, at(p), 1, s.roughFeed, o);
+        }
+        append(result, at(V(start.x(), start.y(), safe)), 2, s.roughFeed, o);
+        double top = start.z() + grid.engagement(start, start, r, start.z());
+        append(result, at(V(start.x(), start.y(), top + .05)), 3, s.roughFeed,
+               o);
+        need(clear(start, start, start.z()),
+             "Rough entry exceeds protected footprint/depth");
+        append(result, at(start), 4, std::min(2., s.roughFeed), o);
+        grid.remove(start, start, r, start.z());
+      }
+      for (size_t k = 1; k < run.size(); ++k) {
+        need(clear(run[k - 1], run[k], start.z()),
+             "Reordered rough cut exceeds protected footprint/depth");
+        append(result, at(run[k]), 0, s.roughFeed, o);
+        grid.remove(run[k - 1], run[k], r, start.z());
+      }
+    }
+  }
+  if (!result.poses.empty()) {
+    V p = result.poses.back().p;
+    p.z() = safe;
+    append(result, at(p), 1, s.roughFeed, o);
+  }
+  return result;
+}
 Pass roughFace(const Scene &scene, int id, const Options &o,
-               const StockSettings &stock, const OperationSpec &spec) {
+               const StockSettings &stock, const OperationSpec &spec,
+               std::string &report) {
   V normal = V::Zero();
   for (const auto &t : scene.mesh)
     if (t.face == id)
@@ -281,28 +389,79 @@ Pass roughFace(const Scene &scene, int id, const Options &o,
         ++selected;
     }
   need(selected > 0, "Selected face has no roughable area for this setup");
+  auto initial = grid;
   auto layers = buildRoughOperations(grid, o, settings);
-  Pass path;
-  for (auto &layer : layers)
-    for (auto p : layer.path.poses) {
+  Pass baseline;
+  for (const auto &layer : layers)
+    for (const auto &p : layer.path.poses)
+      append(baseline, p, p.motion,
+             p.motion == 4 ? std::min(2., stock.roughFeed) : stock.roughFeed,
+             o);
+  Pass localPath = baseline;
+  std::string reason;
+  if (spec.optimize) {
+    try {
+      auto candidate = optimizeRoughLinks(layers, initial, o, settings);
+      need(initial.remaining.size() == grid.remaining.size(),
+           "Rough stock size mismatch");
+      for (size_t k = 0; k < grid.remaining.size(); ++k)
+        need(initial.remaining[k] <= grid.remaining[k] + 1e-7,
+             "Optimized path would leave extra stock");
+      if (roughSeconds(candidate, stock.roughFeed) <
+          roughSeconds(baseline, stock.roughFeed))
+        localPath = std::move(candidate);
+    } catch (const std::runtime_error &e) {
+      reason = e.what();
+    }
+  }
+  auto wrap = [&](const Pass &localPath) {
+    Pass path;
+    for (auto p : localPath.poses) {
       p.p = rotation.conjugate() * p.p;
       p.n = rotation.conjugate() * p.n;
       p.q = rotation.conjugate() * p.q;
       append(path, p, p.motion, stock.roughFeed, o);
     }
-  need(!path.poses.empty(),
-       "Selected face has no roughable area for this setup");
-  Pass result;
-  Pose start = path.poses.front();
-  start.p.z() = std::max(start.p.z(), stock.high.z() +
-                                          std::hypot(o.length, o.diameter / 2) +
-                                          o.clearance);
-  append(result, start, 2, stock.roughFeed, o);
-  for (auto &p : path.poses)
-    append(result, p, p.motion == 2 ? 3 : p.motion, stock.roughFeed, o);
-  Pose end = result.poses.back();
-  end.p.z() = std::max(end.p.z(), start.p.z());
-  append(result, end, 1, stock.roughFeed, o);
+    need(!path.poses.empty(),
+         "Selected face has no roughable area for this setup");
+    Pass result;
+    Pose start = path.poses.front();
+    start.p.z() = std::max(
+        start.p.z(),
+        stock.high.z() + std::hypot(o.length, o.diameter / 2) + o.clearance);
+    append(result, start, 2, stock.roughFeed, o);
+    for (const auto &p : path.poses)
+      append(result, p, p.motion == 2 ? 3 : p.motion, stock.roughFeed, o);
+    Pose end = result.poses.back();
+    end.p.z() = std::max(end.p.z(), start.p.z());
+    append(result, end, 1, stock.roughFeed, o);
+    return result;
+  };
+  auto original = wrap(baseline), result = wrap(localPath);
+  bool improved = roughSeconds(result, stock.roughFeed) + 1e-8 <
+                  roughSeconds(original, stock.roughFeed);
+  if (!improved)
+    result = original;
+  auto air = [](const Pass &p) {
+    double length = 0;
+    for (size_t k = 1; k < p.poses.size(); ++k)
+      if (p.poses[k].motion != 0 && p.poses[k].motion != 4)
+        length += (p.poses[k].p - p.poses[k - 1].p).norm();
+    return length;
+  };
+  std::ostringstream summary;
+  summary << "Черновая грани " << id << ": "
+          << (improved        ? "переходы сокращены"
+              : spec.optimize ? "сохранён исходный маршрут"
+                              : "оптимизация отключена")
+          << "; время " << roughSeconds(original, stock.roughFeed) << " → "
+          << roughSeconds(result, stock.roughFeed) << " с; холостой путь "
+          << air(original) << " → " << air(result)
+          << " мм. Оценка без ускорений и межоперационных переходов, не время "
+             "робота.";
+  if (!reason.empty())
+    summary << " Причина сохранения: " << reason;
+  report = summary.str();
   return result;
 }
 Pass contourPath(const TopoDS_Face &f, const Options &o,
@@ -427,6 +586,7 @@ std::string operationPlanJson(const Scene &scene,
         << ",\"wire\":" << s.wire << ",\"top\":" << s.top
         << ",\"bottom\":" << s.bottom << ",\"depth\":" << s.depth
         << ",\"allowance\":" << s.allowance
+        << ",\"optimize\":" << (s.optimize ? "true" : "false")
         << ",\"confirmed\":true,\"spiral\":" << (s.spiral ? "true" : "false")
         << '}';
   }
@@ -522,7 +682,9 @@ MachiningProgram planOperations(const Model &m, Scene &scene, const Options &o,
         if (strategy == "face_rough" && hole)
           strategy = "bore";
         if (strategy == "face_rough") {
-          op.path = roughFace(scene, s.face, o, stock, s);
+          std::string report;
+          op.path = roughFace(scene, s.face, o, stock, s, report);
+          out.notices.push_back(report);
           roughFaces.insert(s.face);
         } else if (strategy == "surface") {
           need(roughDone || roughFaces.count(s.face),

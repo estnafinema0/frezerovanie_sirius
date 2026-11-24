@@ -229,6 +229,7 @@ int serve(bool openBrowser) {
               op.wire = int(wire);
               op.confirmed = r.get_param_value(prefix + "confirmed") == "1";
               op.spiral = r.get_param_value(prefix + "spiral") == "1";
+              op.optimize = r.get_param_value(prefix + "optimize") != "0";
               op.top = number("top", cfg.stock.high.z());
               op.bottom = number("bottom", cfg.stock.low.z());
               op.depth = number("depth", cfg.stock.stepDown);
