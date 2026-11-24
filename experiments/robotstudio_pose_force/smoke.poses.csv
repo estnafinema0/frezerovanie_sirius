@@ -1,0 +1,4 @@
+stage,operation,sample_id,part_x_mm,part_y_mm,part_z_mm,qw,qx,qy,qz,time_s,motion,collision,sweep_collision
+1,1,0,0,0,0,1,0,0,0,0,2,0,0
+1,1,1,2,0,0,0.9998476951563913,0,0.0174524064372835,0,1,0,0,0
+1,1,2,2,2,0,0.9993908270190958,0,0.034899496702501,0,2,1,0,0

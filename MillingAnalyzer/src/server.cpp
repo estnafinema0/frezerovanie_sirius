@@ -7,6 +7,7 @@
 #endif
 // clang-format on
 #include "server.h"
+#include "egm_session.h"
 #include "geometry.h"
 #include "httplib.h"
 #include "operation_plan.h"
@@ -16,6 +17,8 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <locale>
+#include <map>
 #include <mutex>
 #include <random>
 
@@ -60,6 +63,45 @@ milling::Options options(const httplib::Request &r, bool whole = false) {
   o.validate();
   return o;
 }
+struct ExportPath {
+  milling::Pass path;
+  std::string csv, error;
+};
+std::map<int, ExportPath> faceExports(const milling::Scene &scene) {
+  std::map<int, ExportPath> out;
+  for (const auto &face : scene.faces)
+    out[face.id] = {face.trajectory, "",
+                    face.connectionError.empty() ? face.error
+                                                 : face.connectionError};
+  return out;
+}
+std::string exportCsv(int face, const ExportPath &entry) {
+  if (!entry.error.empty())
+    throw std::runtime_error(entry.error);
+  if (entry.path.segmentCollision)
+    throw std::runtime_error("Swept-path collision; EGM preparation refused");
+  if (!entry.csv.empty())
+    return entry.csv;
+  std::ostringstream out;
+  out.imbue(std::locale::classic());
+  out << std::setprecision(17);
+  out << "face_id,pass_id,sample_id,part_x_mm,part_y_mm,part_z_mm,qw,qx,qy,qz,"
+         "nx,ny,nz,time_s,collision,sweep_collision,motion\n";
+  unsigned i = 0;
+  for (const auto &p : entry.path.poses)
+    out << face << ",0," << i++ << ',' << p.p.x() << ',' << p.p.y() << ','
+        << p.p.z() << ',' << p.q.w() << ',' << p.q.x() << ',' << p.q.y() << ','
+        << p.q.z() << ',' << p.n.x() << ',' << p.n.y() << ',' << p.n.z() << ','
+        << p.t << ',' << int(p.collision) << ',' << int(p.sweepCollision) << ','
+        << p.motion << '\n';
+  return out.str();
+}
+unsigned identifier(const httplib::Request &r, const char *name) {
+  double x = parameter(r, name, -1);
+  if (x < 0 || x > 4294967295. || x != std::floor(x))
+    throw std::runtime_error("Invalid revision or job ID");
+  return unsigned(x);
+}
 } // namespace
 int serve(bool openBrowser) {
   try {
@@ -74,12 +116,17 @@ int serve(bool openBrowser) {
     server.set_write_timeout(120);
     std::mutex mutex;
     auto model = milling::demo();
-    auto initial = milling::withOperationCatalog(
-        milling::json(milling::analyze(model, milling::Options{})), model);
-    unsigned modelRevision = 1;
-    auto revisionJson = [](std::string text, unsigned revision) {
+    auto firstScene = milling::analyze(model, milling::Options{});
+    auto exports = faceExports(firstScene);
+    auto initial =
+        milling::withOperationCatalog(milling::json(firstScene), model);
+    milling::egm::Session egm;
+    unsigned modelRevision = 1, trajectoryRevision = 1;
+    auto revisionJson = [&](std::string text, unsigned revision) {
       text.pop_back();
-      return text + ",\"modelRevision\":" + std::to_string(revision) + "}";
+      return text + ",\"modelRevision\":" + std::to_string(revision) +
+             ",\"trajectoryRevision\":" + std::to_string(trajectoryRevision) +
+             "}";
     };
     initial = revisionJson(std::move(initial), modelRevision);
     int port = server.bind_to_any_port("127.0.0.1");
@@ -117,7 +164,11 @@ int serve(bool openBrowser) {
         return;
       }
       try {
+        if (egm.active())
+          throw std::runtime_error("EGM session active; end it in RobotStudio "
+                                   "before changing the trajectory");
         milling::Scene result;
+        std::string programExport, programError;
         auto nextModel = model;
         std::string data;
         if (r.path == root + "/reset-trajectory") {
@@ -240,6 +291,11 @@ int serve(bool openBrowser) {
                 milling::planOperations(nextModel, result, o, cfg.stock, specs);
           } else
             program = milling::planProgram(nextModel, result, o, cfg);
+          programExport = milling::programCsv(program);
+          if (program.collisions || program.stockCollisions ||
+              program.trajectory.segmentCollision)
+            programError = "Program collision or remaining-stock interference; "
+                           "EGM preparation refused";
           data = specs.empty()
                      ? milling::programJson(result, program)
                      : milling::operationPlanJson(result, program, specs);
@@ -254,7 +310,20 @@ int serve(bool openBrowser) {
         if (r.path == root + "/load" || r.path == root + "/demo" ||
             r.path == root + "/program-demo")
           ++modelRevision;
+        auto nextExports = faceExports(result);
+        if (!programExport.empty()) {
+          // A face view must not hide a program-level stock/collision
+          // rejection.
+          if (!programError.empty())
+            for (auto &entry : nextExports)
+              entry.second.error = programError;
+          nextExports[0] = {
+              {}, std::move(programExport), std::move(programError)};
+        }
+        egm.invalidate();
+        ++trajectoryRevision;
         data = revisionJson(std::move(data), modelRevision);
+        exports = std::move(nextExports);
         model = std::move(nextModel);
         initial = data;
         res.set_header("Cache-Control", "no-store");
@@ -277,10 +346,62 @@ int serve(bool openBrowser) {
     server.Post(root + "/program", api);
     server.Post(root + "/auto-program", api);
     server.Post(root + "/program-demo", api);
+    auto egmApi = [&](const httplib::Request &r, httplib::Response &res) {
+      if (!authorize(r, res))
+        return;
+      std::unique_lock<std::mutex> lock(mutex, std::try_to_lock);
+      if (!lock) {
+        res.status = 409;
+        res.set_content(errorJson("Calculation already running"),
+                        "application/json");
+        return;
+      }
+      try {
+        if (r.path == root + "/egm/prepare") {
+          if (identifier(r, "revision") != trajectoryRevision)
+            throw std::runtime_error("Trajectory changed in another window; "
+                                     "reload and prepare again");
+          auto found = exports.find(int(identifier(r, "face")));
+          if (found == exports.end())
+            throw std::runtime_error(
+                "No calculated trajectory for this face/program");
+          egm.prepare(exportCsv(found->first, found->second));
+        } else if (r.path == root + "/egm/start") {
+          milling::egm::Settings cfg;
+          cfg.bindIp = r.get_param_value("bind");
+          cfg.peerIp = r.get_param_value("peer");
+          unsigned port = identifier(r, "port");
+          if (port > 65535)
+            throw std::runtime_error("UDP port must be 1024..65535");
+          cfg.port = int(port);
+          cfg.virtualConfirmed = r.get_param_value("virtual") == "1";
+          cfg.anchorConfirmed = r.get_param_value("anchor") == "1";
+          egm.start(identifier(r, "job"), cfg);
+        } else if (r.path == root + "/egm/stop")
+          egm.stop();
+        else if (r.path == root + "/egm/download") {
+          res.set_header("Content-Disposition",
+                         "attachment; filename=prepared.poses.csv");
+          res.set_content(egm.csv(identifier(r, "job")),
+                          "text/csv; charset=utf-8");
+          return;
+        }
+        res.set_header("Cache-Control", "no-store");
+        res.set_content(egm.status(), "application/json");
+      } catch (const std::exception &e) {
+        res.status = 400;
+        res.set_content(errorJson(e.what()), "application/json");
+      }
+    };
+    server.Post(root + "/egm/prepare", egmApi);
+    server.Post(root + "/egm/start", egmApi);
+    server.Post(root + "/egm/stop", egmApi);
+    server.Get(root + "/egm/status", egmApi);
+    server.Get(root + "/egm/download", egmApi);
     std::string url = origin + root + "/";
     std::cout << "Milling Analyzer local UI: " << url
               << "\nKeep this console open. Ctrl+C stops the viewer service. "
-                 "No EGM connection.\n"
+                 "EGM opens only after explicit UI start.\n"
               << std::flush;
 #ifdef _WIN32
     if (openBrowser)

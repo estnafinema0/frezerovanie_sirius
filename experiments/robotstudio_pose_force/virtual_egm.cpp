@@ -26,6 +26,7 @@ constexpr Socket invalidSocket = -1;
 #include <fstream>
 #include <iostream>
 #include <sstream>
+#include <optional>
 #include <stdexcept>
 #include <vector>
 using V = Eigen::Vector3d;
@@ -47,7 +48,7 @@ double number(const std::string &s) {
   need(n == s.size() && std::isfinite(x), "Invalid number");
   return x;
 }
-std::vector<Pose> load(const std::filesystem::path &path) {
+std::vector<Pose> load(const std::filesystem::path &path, bool allowProgram) {
   need(std::filesystem::file_size(path) <= 64 * 1024 * 1024,
        "Pose file too large");
   std::ifstream f(path);
@@ -55,7 +56,10 @@ std::vector<Pose> load(const std::filesystem::path &path) {
   std::getline(f, line);
   if (!line.empty() && line.back() == '\r')
     line.pop_back();
-  need(line == "face_id,pass_id,sample_id,part_x_mm,part_y_mm,part_z_mm,qw,qx,"
+  const bool program = allowProgram && line ==
+      "stage,operation,sample_id,part_x_mm,part_y_mm,part_z_mm,qw,qx,qy,qz,"
+      "time_s,motion,collision,sweep_collision";
+  need(program || line == "face_id,pass_id,sample_id,part_x_mm,part_y_mm,part_z_mm,qw,qx,"
                "qy,qz,nx,ny,nz,time_s,collision,sweep_collision,motion",
        "Use whole-face poses CSV, not FrezaEgm CSV");
   std::vector<Pose> out;
@@ -68,19 +72,20 @@ std::vector<Pose> load(const std::filesystem::path &path) {
     std::vector<double> a;
     while (std::getline(stream, word, ','))
       a.push_back(number(word));
-    need(a.size() == 17, "Invalid CSV row");
+    need(a.size() == (program ? 14u : 17u), "Invalid CSV row");
     if (face < 0)
       face = a[0];
-    need(a[0] == face && a[1] == 0 && a[2] == double(out.size()),
+    need((program || (a[0] == face && a[1] == 0)) && a[2] == double(out.size()),
          "One continuous face with ordered samples required");
-    need(a[14] == 0 && a[15] == 0, "Collision flagged: virtual replay refused");
-    need(a[16] >= 0 && a[16] <= 3 && a[16] == std::floor(a[16]),
+    need(a[program ? 12 : 14] == 0 && a[program ? 13 : 15] == 0, "Collision flagged: virtual replay refused");
+    const double motion = a[program ? 11 : 16];
+    need(motion >= 0 && motion <= 3 && motion == std::floor(motion),
          "Invalid motion type");
     Pose p{{a[3], a[4], a[5]},
-           {a[10], a[11], a[12]},
+           program ? V::UnitZ().eval() : V(a[10], a[11], a[12]),
            Q(a[6], a[7], a[8], a[9]),
-           a[13],
-           int(a[16])};
+           a[program ? 10 : 13],
+           int(motion)};
     need(p.p.cwiseAbs().maxCoeff() <= 100000 &&
              std::abs(p.q.norm() - 1) < 1e-6 && std::abs(p.n.norm() - 1) < 1e-6,
          "Invalid pose or normal");
@@ -175,20 +180,53 @@ Pose sample(const std::vector<Pose> &p, double t) {
 }
 int run(const std::vector<std::string> &args) {
   try {
-    need(args.size() == 4 && args[1] == "--virtual-only" &&
+    if (args.size() == 3 && args[1] == "--check-poses") {
+      const auto path = load(std::filesystem::u8path(args[2]), true);
+      unsigned char buffer[512];
+      unsigned count = 0;
+      for (double tick = 0;; tick += .004) {
+        const double t = std::min(tick, path.back().t);
+        const auto point = sample(path, t);
+        const auto bytes = encode(point, count++, uint32_t(t * 1000), buffer, sizeof buffer);
+        auto in = pb_istream_from_buffer(buffer, bytes);
+        EgmSensor packet = EgmSensor_init_zero;
+        need(pb_decode(&in, EgmSensor_fields, &packet), "Offline decode failed");
+        const auto &c = packet.planned.cartesian;
+        need(packet.has_planned && packet.planned.has_cartesian && c.has_pos &&
+             c.pos.has_x && c.pos.has_y && c.pos.has_z && c.has_orient &&
+             c.orient.has_u0 && c.orient.has_u1 && c.orient.has_u2 && c.orient.has_u3 &&
+             !c.has_euler && V(c.pos.x,c.pos.y,c.pos.z).isApprox(point.p) &&
+             Q(c.orient.u0,c.orient.u1,c.orient.u2,c.orient.u3).coeffs().isApprox(point.q.coeffs()),
+             "Offline pose roundtrip mismatch");
+        if (t == path.back().t)
+          break;
+      }
+      std::cout << path.size() << " waypoints, " << count << " verified protobuf commands, "
+                << path.back().t << " s. No sockets opened.\n";
+      return 0;
+    }
+    const bool poseOnly = args.size() == 4 && args[1] == "--pose-only-6510";
+    need(args.size() == 4 && (poseOnly || args[1] == "--virtual-only") &&
              args[2] == "--anchor-first-to-feedback",
-         "Usage: MillingVirtualEgm --virtual-only --anchor-first-to-feedback "
+         "Usage: MillingVirtualEgm (--pose-only-6510 | --virtual-only) --anchor-first-to-feedback "
          "whole-face.poses.csv\nOnly localhost virtual controller. First pose "
          "explicitly anchored to first feedback; NOT measured part placement.");
-    auto path = load(std::filesystem::u8path(args[3]));
+    auto path = load(std::filesystem::u8path(args[3]), poseOnly);
 #ifdef _WIN32
     WSADATA w{};
     need(WSAStartup(MAKEWORD(2, 2), &w) == 0, "Winsock init failed");
 #endif
-    Udp egm(6512), force(6513);
-    std::cout << "Virtual adapter ready: EGM 127.0.0.1:6512, force "
-                 "127.0.0.1:6513. No remote controller permitted.\n"
-              << std::flush;
+    Udp egm(poseOnly ? 6510 : 6512);
+    std::optional<Udp> force;
+    if (!poseOnly)
+      force.emplace(6513);
+    if (poseOnly)
+      std::cout << "Set RAPID runSeconds to " << std::ceil(path.back().t) + 3
+                << " before starting T_ROB1. ";
+    std::cout << "Virtual adapter ready on 127.0.0.1:"
+              << (poseOnly ? 6510 : 6512) << '\n' << std::flush;
+    bool endpointReached = false;
+    double settledSince = -1;
     bool anchored = false, haveForce = false, havePeer = false,
          doneSent = false;
     uint32_t seq = 0, robotSeq = 0;
@@ -212,24 +250,30 @@ int run(const std::vector<std::string> &args) {
       need(anchored || age(boot) < 30,
            "No valid EGM + force feedback within 30 s");
       if (anchored) {
+        if (poseOnly && endpointReached && age(lastFeedback) >= .5)
+          break;
         need(doneSent || age(lastFeedback) < .5,
              "EGM feedback lost; adapter stopped");
-        need(doneSent || age(lastForce) < .25,
+        need(poseOnly || doneSent || age(lastForce) < .25,
              "Force task stale; adapter stopped");
       }
       fd_set readable;
       FD_ZERO(&readable);
       FD_SET(egm.s, &readable);
-      FD_SET(force.s, &readable);
+      Socket highest = egm.s;
+      if (force) {
+        FD_SET(force->s, &readable);
+        highest = std::max(highest, force->s);
+      }
       timeval tv{0, 10000};
-      int ready = select(int(std::max(egm.s, force.s) + 1), &readable, nullptr,
+      int ready = select(int(highest + 1), &readable, nullptr,
                          nullptr, &tv);
       need(ready >= 0, "select failed");
-      if (FD_ISSET(force.s, &readable)) {
+      if (force && FD_ISSET(force->s, &readable)) {
         char data[128];
         sockaddr_in source{};
         SockLen size = sizeof source;
-        int n = recvfrom(force.s, data, sizeof(data) - 1, 0,
+        int n = recvfrom(force->s, data, sizeof(data) - 1, 0,
                          reinterpret_cast<sockaddr *>(&source), &size);
         if (n > 0 && source.sin_addr.s_addr == htonl(INADDR_LOOPBACK)) {
           std::string text(data, n);
@@ -249,7 +293,7 @@ int run(const std::vector<std::string> &args) {
             bool finished = anchored && age(start) > path.back().t + 1.2;
             std::string reply =
                 (finished ? "DONE," : "RUN,") + text.substr(0, comma);
-            sendto(force.s, reply.c_str(), int(reply.size()), 0,
+            sendto(force->s, reply.c_str(), int(reply.size()), 0,
                    reinterpret_cast<sockaddr *>(&source), sizeof source);
             if (finished && !doneSent) {
               doneSent = true;
@@ -277,6 +321,9 @@ int run(const std::vector<std::string> &args) {
           feedback.header.mtype != EgmHeader_MessageType_MSGTYPE_DATA ||
           !feedback.has_feedBack || !feedback.feedBack.has_cartesian)
         continue;
+      if (poseOnly && feedback.has_mciState && feedback.mciState.has_state)
+        need(feedback.mciState.state != EgmMCIState_MCIStateType_MCI_ERROR,
+             "Controller reported MCI_ERROR");
       if (havePeer && int32_t(feedback.header.seqno - robotSeq) <= 0)
         continue;
       auto &c = feedback.feedBack.cartesian;
@@ -294,7 +341,7 @@ int run(const std::vector<std::string> &args) {
       havePeer = true;
       lastFeedback = Clock::now();
       now = Clock::now();
-      if (!haveForce || age(lastForce) >= .25)
+      if (!poseOnly && (!haveForce || age(lastForce) >= .25))
         continue;
       if (!anchored) {
         rotation = q.normalized() * cutterToTcp.conjugate() *
@@ -316,6 +363,19 @@ int run(const std::vector<std::string> &args) {
       applied += std::clamp(desired - applied, -dt, dt);
       target.p = rotation * (target.p + applied * target.n) + translation;
       target.q = (rotation * target.q * cutterToTcp).normalized();
+      if (poseOnly && t >= path.back().t) {
+        double positionError = (target.p - p).norm();
+        double angleError = target.q.angularDistance(q.normalized());
+        if (positionError <= .1 && angleError <= .00872665) {
+          if (settledSince < 0)
+            settledSince = t;
+          endpointReached = t - settledSince >= .2;
+        } else {
+          settledSince = -1;
+          endpointReached = false;
+        }
+        need(t <= path.back().t + 12, "VC did not end its timed EGM session");
+      }
       auto bytes = encode(target, seq++, uint32_t(t * 1000), data, sizeof data);
       need(sendto(egm.s, reinterpret_cast<const char *>(data), int(bytes), 0,
                   reinterpret_cast<sockaddr *>(&peer),

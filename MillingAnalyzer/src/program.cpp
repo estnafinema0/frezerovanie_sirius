@@ -693,6 +693,7 @@ std::string programJson(const Scene &s, const MachiningProgram &p) {
 }
 std::string programCsv(const MachiningProgram &p) {
   std::ostringstream o;
+  o.imbue(std::locale::classic());
   o << std::setprecision(15)
     << "stage,operation,sample_id,part_x_mm,part_y_mm,part_z_mm,qw,qx,qy,qz,"
        "time_s,motion,collision,sweep_collision\n";
