@@ -90,6 +90,15 @@ int main(int argc, char **argv) {
     for (size_t i = 1; i < result.trajectory.poses.size(); ++i)
       check(result.trajectory.poses[i].t >= result.trajectory.poses[i - 1].t,
             "monotonic time");
+    auto slowStock = stock;
+    slowStock.roughFeed = 3;
+    auto slow = planOperations(box, scene, o, slowStock, {rough});
+    for (size_t k = 1; k < slow.trajectory.poses.size(); ++k) {
+      auto &a = slow.trajectory.poses[k - 1];
+      auto &b = slow.trajectory.poses[k];
+      check((b.p - a.p).norm() <= 3 * (b.t - a.t) + 1e-7,
+            "composed roughing preserves separately selected feed");
+    }
     OperationSpec contour = face;
     contour.kind = "contour";
     contour.bottom = 0;

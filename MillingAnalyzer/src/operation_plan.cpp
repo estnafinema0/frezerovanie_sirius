@@ -487,9 +487,10 @@ MachiningProgram planOperations(const Model &m, Scene &scene, const Options &o,
       q.p.z() = std::max(safe, q.p.z());
       append(out.trajectory, q, 2, o.feed, o);
     }
+    const double operationFeed = op.stage == 1 ? stock.roughFeed : o.feed;
     for (auto &p : op.path.poses)
       append(out.trajectory, p, p.motion,
-             p.motion == 4 ? std::min(2., o.feed) : o.feed, o);
+             p.motion == 4 ? std::min(2., operationFeed) : operationFeed, o);
     while (old++ < out.trajectory.poses.size()) {
       out.stage.push_back(op.stage);
       out.operation.push_back(int(i));
