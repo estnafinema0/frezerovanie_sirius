@@ -3,6 +3,7 @@
 #include <TopoDS_Face.hxx>
 #include <TopoDS_Shape.hxx>
 #include <filesystem>
+#include <iosfwd>
 #include <string>
 #include <vector>
 namespace milling {
@@ -57,6 +58,7 @@ struct Scene {
   std::size_t collisionQueries = 0;
 };
 V modelTopCorner(const Scene &);
+Model loadUploadedStep(std::istream &);
 Model loadStep(const std::filesystem::path &);
 Model demo(bool concave = false);
 Model loadPatch(const std::filesystem::path &);

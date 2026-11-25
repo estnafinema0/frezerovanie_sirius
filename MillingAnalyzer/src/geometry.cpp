@@ -96,15 +96,7 @@ void Options::validate() const {
               (normalSign == 1 || normalSign == -1) && face >= 0,
           "Invalid tool, feed, face or normal sign");
 }
-Model loadStep(const std::filesystem::path &path) {
-  require(std::filesystem::is_regular_file(path) &&
-              std::filesystem::file_size(path) > 0 &&
-              std::filesystem::file_size(path) <= 50 * 1024 * 1024,
-          "STEP must be a nonempty regular file <=50 MiB");
-  STEPControl_Reader r;
-  // OCCT 7.9 accepts UTF-8 file names on Windows via its OSD layer.
-  require(r.ReadFile(path.u8string().c_str()) == IFSelect_RetDone,
-          "STEP read failed");
+static Model transferStep(STEPControl_Reader &r) {
   TColStd_SequenceOfAsciiString len, a, s;
   r.FileUnits(len, a, s);
   require(len.Length() > 0, "STEP has no declared length units");
@@ -120,6 +112,23 @@ Model loadStep(const std::filesystem::path &path) {
   require(!shape.IsNull() && BRepCheck_Analyzer(shape).IsValid(),
           "Invalid STEP B-rep");
   return {shape, units};
+}
+Model loadStep(const std::filesystem::path &path) {
+  require(std::filesystem::is_regular_file(path) &&
+              std::filesystem::file_size(path) > 0 &&
+              std::filesystem::file_size(path) <= 50 * 1024 * 1024,
+          "STEP must be a nonempty regular file <=50 MiB");
+  STEPControl_Reader r;
+  // OCCT 7.9 accepts UTF-8 file names on Windows via its OSD layer.
+  require(r.ReadFile(path.u8string().c_str()) == IFSelect_RetDone,
+          "STEP read failed");
+  return transferStep(r);
+}
+Model loadUploadedStep(std::istream &stream) {
+  STEPControl_Reader reader;
+  require(reader.ReadStream("upload.step", stream) == IFSelect_RetDone,
+          "STEP read failed");
+  return transferStep(reader);
 }
 Model demo(bool concave) {
   TColgp_Array2OfPnt poles(1, 4, 1, 4);

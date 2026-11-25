@@ -194,26 +194,31 @@ int serve(bool openBrowser) {
             throw std::runtime_error("Supported files: STEP, STP, bpatch");
           if (r.body.empty())
             throw std::runtime_error("Empty model");
-          auto folder = std::filesystem::temp_directory_path() /
-                        std::filesystem::u8path("milling-" + token.str());
-          std::filesystem::create_directories(folder);
-          struct Cleanup {
-            std::filesystem::path file;
-            ~Cleanup() {
-              std::error_code ec;
-              std::filesystem::remove(file, ec);
-              std::filesystem::remove(file.parent_path(), ec);
+          milling::Model candidate;
+          if (format == "step") {
+            std::istringstream stream(r.body);
+            candidate = milling::loadUploadedStep(stream);
+          } else {
+            auto folder = std::filesystem::temp_directory_path() /
+                          std::filesystem::u8path("milling-" + token.str());
+            std::filesystem::create_directories(folder);
+            struct Cleanup {
+              std::filesystem::path file;
+              ~Cleanup() {
+                std::error_code ec;
+                std::filesystem::remove(file, ec);
+                std::filesystem::remove(file.parent_path(), ec);
+              }
+            } cleanup{folder / ("input." + format)};
+            {
+              std::ofstream f(cleanup.file, std::ios::binary);
+              f.write(r.body.data(), r.body.size());
+              f.flush();
+              if (!f)
+                throw std::runtime_error("Cannot stage local model");
             }
-          } cleanup{folder / ("input." + format)};
-          {
-            std::ofstream f(cleanup.file, std::ios::binary);
-            f.write(r.body.data(), r.body.size());
-            f.flush();
-            if (!f)
-              throw std::runtime_error("Cannot stage local model");
+            candidate = milling::loadPatch(cleanup.file);
           }
-          auto candidate = format == "step" ? milling::loadStep(cleanup.file)
-                                            : milling::loadPatch(cleanup.file);
           milling::Options o;
           o.previewOnly = true;
           result = milling::analyze(candidate, o);
