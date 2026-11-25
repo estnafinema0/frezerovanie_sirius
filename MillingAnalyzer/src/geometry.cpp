@@ -33,6 +33,19 @@
 #include <sstream>
 #include <stdexcept>
 namespace milling {
+V modelTopCorner(const Scene &scene) {
+  if (scene.mesh.empty()) throw std::runtime_error("Model mesh is empty");
+  V corner = scene.mesh.front().a;
+  for (const auto &tri : scene.mesh) {
+    for (const auto &v : {tri.a, tri.b, tri.c}) {
+      corner.x() = std::min(corner.x(), v.x());
+      corner.y() = std::min(corner.y(), v.y());
+      corner.z() = std::max(corner.z(), v.z());
+    }
+  }
+  return corner;
+}
+
 namespace {
 constexpr double pi = 3.141592653589793;
 void require(bool b, const char *text) {

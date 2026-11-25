@@ -699,9 +699,11 @@ std::string programCsv(const MachiningProgram &p) {
        "time_s,motion,collision,sweep_collision\n";
   for (size_t k = 0; k < p.trajectory.poses.size(); ++k) {
     const auto &v = p.trajectory.poses[k];
-    o << p.stage[k] << ',' << p.operation[k] + 1 << ',' << k << ',' << v.p.x()
-      << ',' << v.p.y() << ',' << v.p.z() << ',' << v.q.w() << ',' << v.q.x()
-      << ',' << v.q.y() << ',' << v.q.z() << ',' << v.t << ',' << v.motion
+    const V position = v.p - p.settings.stock.topCorner();
+    const Q tcp = tcpOrientation(v.q);
+    o << p.stage[k] << ',' << p.operation[k] + 1 << ',' << k << ',' << position.x()
+      << ',' << position.y() << ',' << position.z() << ',' << tcp.w() << ',' << tcp.x()
+      << ',' << tcp.y() << ',' << tcp.z() << ',' << v.t << ',' << v.motion
       << ',' << v.collision << ',' << v.sweepCollision << '\n';
   }
   return o.str();

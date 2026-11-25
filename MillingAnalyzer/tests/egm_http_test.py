@@ -92,6 +92,11 @@ with tempfile.TemporaryDirectory() as tmp:
                 (export_dir/'flat-parameters.json').write_text(json.dumps(dict(face=floor,diameter=2.5,feed=20,spacing=2,step=2,clearance=2,length=8,preflight=prepared),indent=2),encoding='utf-8')
             rows=list(csv.DictReader(io.StringIO(text)));assert len(rows)==prepared['poses']
             assert all(r['pass_id']=='0' and r['face_id']==str(floor) for r in rows)
+            first_cam=next(f for f in scene['faces'] if f['id']==floor)['trajectory']['poses'][0]
+            first_xyz=[float(rows[0][k]) for k in ('part_x_mm','part_y_mm','part_z_mm')]
+            assert abs(first_xyz[2]-(first_cam['p'][2]-5))<1e-6
+            tcp=[float(rows[0][k]) for k in ('qw','qx','qy','qz')]
+            assert rotate(tcp,[0,0,1])[2]<-.99999
             job=prepared['job']
             api('/egm/start',dict(settings,job=job,port=6510,virtual=0),expected=400)
             api('/egm/start',dict(settings,job=job,port=6510,anchor=0),expected=400)
@@ -120,7 +125,7 @@ with tempfile.TemporaryDirectory() as tmp:
                 wait_state({'waiting'})
                 first = rows[0]
                 p0 = [calibrated['t'+a]+float(first['part_'+a+'_mm']) for a in 'xyz']
-                q0 = qmul([float(first[k]) for k in ('qw','qx','qy','qz')], [0,1,0,0])
+                q0 = [float(first[k]) for k in ('qw','qx','qy','qz')]
                 with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as peer:
                     peer.settimeout(.2)
                     if mismatch:
@@ -202,6 +207,10 @@ with tempfile.TemporaryDirectory() as tmp:
             pre=api('/egm/prepare',dict(face=0,revision=program['trajectoryRevision']))
             data=api('/egm/download',dict(job=pre['job']),method='GET')
             assert data.startswith('stage,operation,') and ',4,0,0\n' in data
+            first_program=program['program']['trajectory']['poses'][0]['p']
+            sent=next(csv.DictReader(io.StringIO(data)))
+            for k,v,corner in zip(('part_x_mm','part_y_mm','part_z_mm'),first_program,(-1,-1,6)):
+                assert abs(float(sent[k])-(v-corner))<1e-5
             if export_dir:
                 (export_dir/'rough-program.poses.csv').write_text(data,encoding='utf-8')
             # Curved Bezier model sends changing tool orientation through the same path.

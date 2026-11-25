@@ -2,7 +2,7 @@ MODULE MillingPose6510
     ! Load only into a NEW virtual IRB1600-10/1.45 controller, T_ROB1.
     ! This module does not replace RobotStudio/ModuleEGM.mod.
     PERS bool virtualConfirmed:=FALSE;
-    PERS tooldata simTool:=[TRUE,[[0,0,280],[0,1,0,0]],[0.05,[0,0,100],[1,0,0,0],0,0,0]];
+    PERS tooldata simTool:=[TRUE,[[0,0,280],[1,0,0,0]],[0.05,[0,0,100],[1,0,0,0],0,0,0]];
     PERS num runSeconds:=5;
     VAR egmident id;
     VAR bool acquired:=FALSE;

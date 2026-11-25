@@ -25,6 +25,8 @@ struct Pose {
   int motion =
       0; // segment ending here: 0=cut, 1=retract, 2=transfer, 3=approach
 };
+// Planner +Z follows the cutter body. TCP +Z points from the spindle to the tip.
+inline Q tcpOrientation(const Q &cutter) { return cutter * Q(0, 1, 0, 0); }
 struct Pass {
   std::vector<Pose> poses;
   bool segmentCollision = false;
@@ -54,6 +56,7 @@ struct Scene {
   std::string sourceUnits;
   std::size_t collisionQueries = 0;
 };
+V modelTopCorner(const Scene &);
 Model loadStep(const std::filesystem::path &);
 Model demo(bool concave = false);
 Model loadPatch(const std::filesystem::path &);

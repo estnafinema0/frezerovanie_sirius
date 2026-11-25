@@ -408,8 +408,6 @@ void Session::run(std::shared_ptr<const Plan> plan, Settings cfg) {
       message_ = "Listening; start MillingPose6510 in the virtual T_ROB1 (30 s "
                  "timeout)";
     }
-    // The virtual RAPID tool frame now uses +Z toward the holder.
-    const Q cutterToTcp = cfg.calibrated ? Q(0, 1, 0, 0) : Q::Identity();
     Q rotation = Q::Identity();
     V translation = V::Zero();
     sockaddr_in peer{};
@@ -500,12 +498,12 @@ void Session::run(std::shared_ptr<const Plan> plan, Settings cfg) {
         if (cfg.calibrated) {
           rotation = cfg.partRotation.normalized();
           translation = cfg.partOrigin;
-          const Q initial = (rotation * first.q * cutterToTcp).normalized();
+          const Q initial = (rotation * first.q).normalized();
           need((rotation * first.p + translation - p).norm() <= .1 &&
                    initial.angularDistance(q) <= .00872665,
                "TCP differs from calibrated start (>0.1 mm or >0.5 deg)");
         } else {
-          rotation = (q * cutterToTcp.conjugate() * first.q.conjugate()).normalized();
+          rotation = (q * first.q.conjugate()).normalized();
           translation = p - rotation * first.p;
         }
         start = now;
@@ -548,7 +546,7 @@ void Session::run(std::shared_ptr<const Plan> plan, Settings cfg) {
       Pose target = holding ? hold : sample(plan->poses, t);
       if (!holding) {
         target.p = rotation * target.p + translation;
-        target.q = (rotation * target.q * cutterToTcp).normalized();
+        target.q = (rotation * target.q).normalized();
         if (t >= plan->poses.back().t) {
           if ((target.p - p).norm() <= .1 &&
               target.q.angularDistance(q) <= .00872665) {

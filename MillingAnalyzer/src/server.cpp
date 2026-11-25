@@ -68,12 +68,17 @@ struct ExportPath {
   std::string csv, error;
   bool programInterference = false;
 };
-std::map<int, ExportPath> faceExports(const milling::Scene &scene) {
+std::map<int, ExportPath> faceExports(const milling::Scene &scene, const milling::V &corner) {
   std::map<int, ExportPath> out;
   for (const auto &face : scene.faces)
     out[face.id] = {face.trajectory, "",
                     face.connectionError.empty() ? face.error
                                                  : face.connectionError};
+  for (auto &item : out)
+    for (auto &pose : item.second.path.poses) {
+      pose.p -= corner;
+      pose.q = milling::tcpOrientation(pose.q);
+    }
   return out;
 }
 std::string exportCsv(int face, const ExportPath &entry, bool virtualReview) {
@@ -120,7 +125,7 @@ int serve(bool openBrowser) {
     std::mutex mutex;
     auto model = milling::demo();
     auto firstScene = milling::analyze(model, milling::Options{});
-    auto exports = faceExports(firstScene);
+    auto exports = faceExports(firstScene, modelTopCorner(firstScene));
     auto initial =
         milling::withOperationCatalog(milling::json(firstScene), model);
     milling::egm::Session egm;
@@ -172,6 +177,7 @@ int serve(bool openBrowser) {
                                    "before changing the trajectory");
         milling::Scene result;
         std::string programExport;
+        milling::V stockCorner = milling::V::Zero();
         bool programInterference = false;
         auto nextModel = model;
         std::string data;
@@ -295,6 +301,7 @@ int serve(bool openBrowser) {
                 milling::planOperations(nextModel, result, o, cfg.stock, specs);
           } else
             program = milling::planProgram(nextModel, result, o, cfg);
+          stockCorner = program.settings.stock.topCorner();
           programExport = milling::programCsv(program);
           programInterference = program.collisions || program.stockCollisions ||
                                 program.trajectory.segmentCollision;
@@ -312,7 +319,7 @@ int serve(bool openBrowser) {
         if (r.path == root + "/load" || r.path == root + "/demo" ||
             r.path == root + "/program-demo")
           ++modelRevision;
-        auto nextExports = faceExports(result);
+        auto nextExports = faceExports(result, programExport.empty() ? modelTopCorner(result) : stockCorner);
         if (!programExport.empty()) {
           // A face view must not hide a program-level stock/collision
           // rejection.
