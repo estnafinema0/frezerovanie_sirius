@@ -111,8 +111,17 @@ unsigned identifier(const httplib::Request &r, const char *name) {
   return unsigned(x);
 }
 } // namespace
-int serve(bool openBrowser, const std::filesystem::path &initialFile) {
+int serve(bool openBrowser, const std::filesystem::path &initialFile,
+          const std::filesystem::path &ethernetFile) {
   try {
+    std::string localIp, controllerIp;
+    if (!ethernetFile.empty()) {
+      std::ifstream profile(ethernetFile);
+      std::string extra;
+      if (!(profile >> localIp >> controllerIp) || (profile >> extra))
+        throw std::runtime_error("Enter the PC Ethernet IPv4 on line 1 and the IRC5 IPv4 on line 2 of Ethernet-IP.txt");
+      milling::egm::validateEthernetPair(localIp, controllerIp);
+    }
     std::random_device random;
     std::ostringstream token;
     for (int i = 0; i < 4; ++i)
@@ -155,6 +164,11 @@ int serve(bool openBrowser, const std::filesystem::path &initialFile) {
                [&](const httplib::Request &, httplib::Response &res) {
                  std::lock_guard<std::mutex> lock(mutex);
                  std::string page = viewerTemplate;
+                 if (!ethernetFile.empty()) {
+                   const std::string marker = "/*ethernet-profile*/null";
+                   page.replace(page.find(marker), marker.size(),
+                                "[\"" + localIp + "\",\"" + controllerIp + "\"]");
+                 }
                  auto p = page.find("@@SCENE@@");
                  page.replace(p, 9, initial);
                  p = page.find("@@API@@");
@@ -393,6 +407,10 @@ int serve(bool openBrowser, const std::filesystem::path &initialFile) {
           cfg.anchorConfirmed = r.get_param_value("anchor") == "1";
           cfg.workObject = r.get_param_value("workObject") == "1";
           cfg.calibrated = r.get_param_value("calibrated") == "1";
+          if (!ethernetFile.empty() &&
+              (cfg.bindIp != localIp || cfg.peerIp != controllerIp || cfg.port != 6510 ||
+               !cfg.calibrated || cfg.workObject || cfg.virtualConfirmed || cfg.anchorConfirmed))
+            throw std::runtime_error("Start settings differ from the fixed Ethernet profile");
           if (cfg.calibrated) {
             auto required = [&](const char *name) {
               if (!r.has_param(name) || r.get_param_value(name).empty())

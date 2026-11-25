@@ -21,13 +21,14 @@ int run(std::vector<std::string> args) {
   if (args.size() == 1 || (args.size() >= 2 && args[1] == "--serve"))
     {
       bool openBrowser = true;
-      std::filesystem::path initialFile;
+      std::filesystem::path initialFile, ethernetFile;
       for (size_t i = 2; i < args.size(); ++i) {
         if (args[i] == "--no-open") openBrowser = false;
+        else if (args[i] == "--ethernet-profile" && i + 1 < args.size()) ethernetFile = std::filesystem::u8path(args[++i]);
         else if (args[i] == "--step" && i + 1 < args.size()) initialFile = std::filesystem::u8path(args[++i]);
         else { std::cerr << "Usage: --serve [--no-open] [--step file.step]\n"; return 1; }
       }
-      return serve(openBrowser, initialFile);
+      return serve(openBrowser, initialFile, ethernetFile);
     }
   try {
     milling::Options options;

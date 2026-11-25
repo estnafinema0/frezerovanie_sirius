@@ -112,6 +112,15 @@ void vectorJson(std::ostream &out, const V &p) {
   out << '[' << p.x() << ',' << p.y() << ',' << p.z() << ']';
 }
 } // namespace
+void validateEthernetPair(const std::string &local, const std::string &peer) {
+  for (const auto *value : {&local, &peer})
+    need(value->size() <= 15 && value->find_first_not_of("0123456789.") == std::string::npos,
+         "Enter each Ethernet IPv4 in dotted decimal notation");
+  const auto a = ntohl(ip(local, false).s_addr), b = ntohl(ip(peer, false).s_addr);
+  need(a != b && (a >> 24) != 127 && (b >> 24) != 127 &&
+           (a >> 24) != 0 && (b >> 24) != 0,
+       "Ethernet profile requires distinct LAN IPv4 addresses for PC and IRC5");
+}
 
 std::vector<unsigned char> encode(const Pose &p, uint32_t seq, uint32_t tm) {
   EgmSensor packet = EgmSensor_init_zero;

@@ -42,6 +42,20 @@ with tempfile.TemporaryDirectory() as temp:
                         expect(page.locator('#egmWorkObject')).to_be_checked()
                     finally:
                         direct.terminate()
+                profile=Path(temp)/'Ethernet-IP.txt'
+                profile.write_text('192.0.2.10\n192.0.2.20\n')
+                with subprocess.Popen([package / 'MillingAnalyzer.exe','--serve','--no-open','--ethernet-profile',profile],
+                                      cwd=temp,stdout=subprocess.PIPE,text=True) as ethernet:
+                    try:
+                        page.goto(ethernet.stdout.readline().split()[-1])
+                        expect(page.locator('#egmBind')).to_have_value('192.0.2.10')
+                        expect(page.locator('#egmPeer')).to_have_value('192.0.2.20')
+                        expect(page.locator('#egmPort')).to_have_value('6510')
+                        expect(page.locator('#egmBind')).to_be_disabled()
+                        expect(page.locator('#egmWorkObject')).not_to_be_checked()
+                        expect(page.locator('#egmCalibrated')).not_to_be_checked()
+                    finally:
+                        ethernet.terminate()
                 browser.close()
         finally:
             app.terminate()

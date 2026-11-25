@@ -143,6 +143,11 @@ $('calculateOperations').onclick=async()=>{if(busy)return;if(!operationDrafts.le
 
 $('clearTrajectory').onclick=async()=>{if(busy)return;let params=new URLSearchParams({revision:scene.modelRevision});for(const id of ['diameter','length','spacing','step','chord','angle','feed','clearance','sign'])params.set(id,$(id).value);if(await request('/reset-trajectory?'+params)){$('loadStatus').textContent='Траектория сброшена. Модель, настройки и дерево операций сохранены. Можно рассчитать заново.';operationMessage($('loadStatus').textContent);}};
 
+const ethernetProfile=/*ethernet-profile*/null;
+if(ethernetProfile){
+ $('egmBind').value=ethernetProfile[0];$('egmPeer').value=ethernetProfile[1];
+ $('egmWorkObject').checked=false;
+}
 let egmActive=false,egmState=null,egmPolling=false,egmError="";
 const egmStates={idle:'Не подготовлено',prepared:'Подготовлено · сеть закрыта',starting:'Открываем порт',waiting:'Ожидание первого пакета от VC',running:'Передача XYZ + ориентации',holding:'Удержание · остановите EGM в RobotStudio',completed:'Завершено · проверьте Event Log',stopped:'Остановлено',error:'Ошибка передачи'};
 function showEgm(s){
@@ -158,6 +163,7 @@ function showEgm(s){
  $('egmStart').disabled=busy||s.active||!s.poses||(workObject?!$('egmVirtual').checked:$('egmCalibrated').checked?$('egmVirtual').checked||$('egmAnchor').checked:!$('egmVirtual').checked||!$('egmAnchor').checked);
  $('egmStop').disabled=!s.active;
  for(const id of['egmBind','egmPeer','egmPort','egmWorkObject','egmReview','egmVirtual','egmAnchor','egmCalibrated','tx','ty','tz','qw','qx','qy','qz'])$(id).disabled=s.active;
+ if(ethernetProfile)for(const id of ['egmBind','egmPeer','egmPort','egmWorkObject','egmReview','egmVirtual','egmAnchor'])$(id).disabled=true;
  if(workObject)for(const id of ['egmReview','egmAnchor','egmCalibrated','tx','ty','tz','qw','qx','qy','qz'])$(id).disabled=true;
  $('egmPlacement').hidden=!s.anchored;
  if(s.anchored)$('egmPlacement').textContent=`Размещение\nПеренос, мм: [${vector(s.translation)}]\nПоворот wxyz: [${vector(s.rotation)}]\n${s.workObject?'Границы в camStock':'Границы в базе'} (огибающий блок):\n[${vector(s.baseMin)}] → [${vector(s.baseMax)}]`;

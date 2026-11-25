@@ -5,7 +5,7 @@ New-Item -ItemType Directory -Force $destination | Out-Null
 Copy-Item (Join-Path $Build "$Config/MillingAnalyzer.exe") $destination
 Copy-Item (Join-Path $Build "$Config/*.dll") $destination
 Copy-Item (Join-Path $Build "$Config/licenses") $destination -Recurse -Force
-Copy-Item "MillingAnalyzer/tools/Start-Milling.cmd" $destination
+Copy-Item "MillingAnalyzer/tools/Start-Milling.cmd","MillingAnalyzer/tools/Start-Ethernet.cmd","MillingAnalyzer/tools/Ethernet-IP.txt" $destination
 Copy-Item "MillingAnalyzer/tools/MillingPose6510.mod" $destination
 Copy-Item "MillingAnalyzer/tools/MillingWorkObject.mod" $destination
 Copy-Item "docs/21-egm-calibrated-commissioning.md" (Join-Path $destination "README-Calibrated-EGM.md")

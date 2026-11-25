@@ -39,6 +39,7 @@ struct Settings {
   Q partRotation = Q::Identity();
   bool virtualConfirmed = false, anchorConfirmed = false;
 };
+void validateEthernetPair(const std::string &local, const std::string &peer);
 class Session {
 public:
   ~Session();
