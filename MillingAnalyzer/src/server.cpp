@@ -66,6 +66,7 @@ milling::Options options(const httplib::Request &r, bool whole = false) {
 struct ExportPath {
   milling::Pass path;
   std::string csv, error;
+  bool programInterference = false;
 };
 std::map<int, ExportPath> faceExports(const milling::Scene &scene) {
   std::map<int, ExportPath> out;
@@ -75,10 +76,12 @@ std::map<int, ExportPath> faceExports(const milling::Scene &scene) {
                                                  : face.connectionError};
   return out;
 }
-std::string exportCsv(int face, const ExportPath &entry) {
+std::string exportCsv(int face, const ExportPath &entry, bool virtualReview) {
   if (!entry.error.empty())
     throw std::runtime_error(entry.error);
-  if (entry.path.segmentCollision)
+  if (entry.programInterference && !virtualReview)
+    throw std::runtime_error("Program collision or remaining-stock interference; EGM preparation refused");
+  if (entry.path.segmentCollision && !virtualReview)
     throw std::runtime_error("Swept-path collision; EGM preparation refused");
   if (!entry.csv.empty())
     return entry.csv;
@@ -168,7 +171,8 @@ int serve(bool openBrowser) {
           throw std::runtime_error("EGM session active; end it in RobotStudio "
                                    "before changing the trajectory");
         milling::Scene result;
-        std::string programExport, programError;
+        std::string programExport;
+        bool programInterference = false;
         auto nextModel = model;
         std::string data;
         if (r.path == root + "/reset-trajectory") {
@@ -292,10 +296,8 @@ int serve(bool openBrowser) {
           } else
             program = milling::planProgram(nextModel, result, o, cfg);
           programExport = milling::programCsv(program);
-          if (program.collisions || program.stockCollisions ||
-              program.trajectory.segmentCollision)
-            programError = "Program collision or remaining-stock interference; "
-                           "EGM preparation refused";
+          programInterference = program.collisions || program.stockCollisions ||
+                                program.trajectory.segmentCollision;
           data = specs.empty()
                      ? milling::programJson(result, program)
                      : milling::operationPlanJson(result, program, specs);
@@ -314,11 +316,9 @@ int serve(bool openBrowser) {
         if (!programExport.empty()) {
           // A face view must not hide a program-level stock/collision
           // rejection.
-          if (!programError.empty())
-            for (auto &entry : nextExports)
-              entry.second.error = programError;
-          nextExports[0] = {
-              {}, std::move(programExport), std::move(programError)};
+          for (auto &entry : nextExports)
+            entry.second.programInterference = programInterference;
+          nextExports[0] = {{}, std::move(programExport), "", programInterference};
         }
         egm.invalidate();
         ++trajectoryRevision;
@@ -365,7 +365,8 @@ int serve(bool openBrowser) {
           if (found == exports.end())
             throw std::runtime_error(
                 "No calculated trajectory for this face/program");
-          egm.prepare(exportCsv(found->first, found->second));
+          const bool virtualReview = r.get_param_value("virtualReview") == "1";
+          egm.prepare(exportCsv(found->first, found->second, virtualReview), virtualReview);
         } else if (r.path == root + "/egm/start") {
           milling::egm::Settings cfg;
           cfg.bindIp = r.get_param_value("bind");

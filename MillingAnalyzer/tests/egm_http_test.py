@@ -167,10 +167,10 @@ with tempfile.TemporaryDirectory() as tmp:
                 first=rows[0];last=rows[-1]
                 fq=[float(first[k]) for k in ('qw','qx','qy','qz')]
                 lq=[float(last[k]) for k in ('qw','qx','qy','qz')]
-                r=qmul(qmul(q0,[0,-1,0,0]),conjugate(fq))
+                r=qmul(q0,conjugate(fq))
                 delta=rotate(r,[float(last[k])-float(first[k]) for k in ('part_x_mm','part_y_mm','part_z_mm')])
                 assert max(abs(p[i]-(p0[i]+delta[i])) for i in range(3))<1e-8,(p,delta)
-                expected_q=qmul(qmul(r,lq),[0,1,0,0])
+                expected_q=qmul(r,lq)
                 assert abs(abs(sum(a*b for a,b in zip(q,expected_q)))-1)<1e-9
             completed=wait_state({'completed','error'});assert completed['state']=='completed',completed
             assert completed['anchored'] and completed['sent']>100
@@ -223,6 +223,17 @@ with tempfile.TemporaryDirectory() as tmp:
             assert any(p['collision'] or p['sweepCollision'] for p in concave['faces'][0]['trajectory']['poses'])
             refused=api('/egm/prepare',dict(face=1,revision=concave['trajectoryRevision']),body=text.encode(),expected=400)
             assert 'collision' in refused['error'].lower(), 'Client body cannot clear server-owned collision flags'
+            pre=api('/egm/prepare',dict(face=1,revision=concave['trajectoryRevision'],virtualReview=1))
+            saved=api('/egm/download',dict(job=pre['job']),method='GET')
+            assert any(r['collision']=='1' or r['sweep_collision']=='1' for r in csv.DictReader(io.StringIO(saved)))
+            api('/egm/start',dict(calibrated,job=pre['job'],port=6510),expected=400)
+            api('/egm/start',dict(settings,job=pre['job'],peer='192.0.2.1',port=6510),expected=400)
+            port=free_port();start(pre['job'],port)
+            with socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as peer:
+                peer.settimeout(.5)
+                pose,_,_,_=exchange(peer,0,pose_bytes([750,0,600],[1,0,0,0]),port)
+                api('/egm/stop');exchange(peer,1,pose,port)
+            wait_state({'stopped'})
             print('STEP -> CAM -> canonical CSV -> protobuf -> UDP: passed (XYZ, rotating quaternion, plunge=4, lifecycle and rejection). RobotStudio not used.')
         finally:
             proc.terminate();proc.wait(timeout=10)

@@ -16,13 +16,14 @@
 <label><input id="operationOptimize" type="checkbox" checked> Сократить переходы растровой черновой</label><div class="row"><button id="confirmOperation">Подтвердить операцию</button><button id="removeOperation">Удалить</button></div><div class="row"><button id="calculateOperations" class="primary">Рассчитать дерево операций</button><button id="clearTrajectory">Сбросить траекторию</button></div><div id="operationStatus" class="alert" role="status" aria-live="polite">Добавьте операцию или запросите предложения.</div></section>
 <details><summary>Прежние способы расчёта</summary><label>Прежний режим</label><select id="strategy" aria-label="Стратегия обработки"><option value="both" selected>Автоматически · вся деталь</option><option value="rough">Только черновая · Z-слои</option><option value="finish">Вручную · чистовая одной грани</option></select><button id="autoCalculate" class="primary">Рассчитать всю деталь</button><p class="muted">Черновая → чистовая. Выбирать грани не требуется.</p><button id="calculate">Рассчитать выбранный режим</button></details></div><section id="egmPanel" hidden><h2>5. Проверка в RobotStudio · RW6</h2>
 <p class="muted">Передаётся вся рассчитанная программа или вся выбранная грань, вместе с переходами. EGM получает позы по UDP, а CSV остаётся файлом проверки.</p>
+<label><input id="egmReview" type="checkbox"> Выгрузка для локальной RobotStudio: разрешить пересечения с моделью и остаточным материалом</label>
 <button id="egmPrepare" class="primary">Проверить и подготовить выбранную траекторию</button>
 <pre id="egmPlan">Сначала рассчитайте траекторию.</pre><a id="egmDownload" hidden>Скачать подготовленные позы CSV</a>
 <div class="settings"><label>IP этого компьютера<input id="egmBind" value="127.0.0.1" inputmode="decimal"></label><label>IP контроллера<input id="egmPeer" value="127.0.0.1" inputmode="decimal"></label><label>Локальный UDP-порт<input id="egmPort" type="number" min="1024" max="65535" value="6510"></label></div>
 <p class="muted">Если программа и RobotStudio на одном ПК — оставьте 127.0.0.1. В UCdevice укажите IP компьютера с этой программой и этот порт. После подготовки задайте показанное runSeconds в RAPID.</p>
 <label><input id="egmVirtual" type="checkbox"> Это виртуальный IRB1600 с отдельным MillingPose6510, не физический робот</label>
 <label><input id="egmAnchor" type="checkbox"> Совместить первую позу с первым откликом VC. Это демонстрационное размещение, не калибровка детали</label>
-<p class="muted">TCP этого профиля: виртуальный toolPencil 280 мм. Разворот системы инструмента Rx(180°) применяется один раз; длина TCP к координатам не прибавляется. Для шпинделя требуется отдельная калибровка.</p>
+<p class="muted">TCP этого профиля: виртуальный toolPencil 280 мм. В виртуальном профиле +Z направлена к держателю; используйте RAPID-модуль из этой сборки; длина TCP к координатам не прибавляется. Для шпинделя требуется отдельная калибровка.</p>
 <label><input id="egmCalibrated" type="checkbox"> Измеренная привязка детали. TCP и оси инструмента проверены</label>
 <div class="settings"><label>Начало детали X, мм<input id="tx" type="number" step="any"></label>
 <label>Y, мм<input id="ty" type="number" step="any"></label>
@@ -141,13 +142,13 @@ function showEgm(s){
  $('egmPrepare').disabled=busy||s.active;
  $('egmStart').disabled=busy||s.active||!s.poses||($('egmCalibrated').checked?$('egmVirtual').checked||$('egmAnchor').checked:!$('egmVirtual').checked||!$('egmAnchor').checked);
  $('egmStop').disabled=!s.active;
- for(const id of['egmBind','egmPeer','egmPort','egmVirtual','egmAnchor','egmCalibrated','tx','ty','tz','qw','qx','qy','qz'])$(id).disabled=s.active;
+ for(const id of['egmBind','egmPeer','egmPort','egmReview','egmVirtual','egmAnchor','egmCalibrated','tx','ty','tz','qw','qx','qy','qz'])$(id).disabled=s.active;
  $('egmPlacement').hidden=!s.anchored;
  if(s.anchored)$('egmPlacement').textContent=`Размещение\nПеренос, мм: [${vector(s.translation)}]\nПоворот wxyz: [${vector(s.rotation)}]\nГраницы в базе (огибающий блок):\n[${vector(s.baseMin)}] → [${vector(s.baseMax)}]`;
 }
 async function pollEgm(){if(!api||egmPolling)return;egmPolling=true;try{const r=await fetch(api+'/egm/status',{cache:'no-store'});if(r.ok)showEgm(await r.json());}catch(e){$('egmStatus').textContent='Нет связи с локальным приложением. Проверьте его окно и состояние EGM в RobotStudio.';}finally{egmPolling=false;}}
 async function egmAction(route,params){egmError='';try{const r=await fetch(api+'/egm/'+route+'?'+new URLSearchParams(params),{method:'POST'}),data=await r.json();if(!r.ok)throw Error(data.error||'Ошибка EGM');showEgm(data);}catch(e){egmError=e.message;$('egmStatus').textContent='EGM: '+e.message;$('egmStatus').classList.add('bad');}}
-$('egmPrepare').onclick=()=>egmAction('prepare',{revision:scene.trajectoryRevision,face:face.id});
+$('egmPrepare').onclick=()=>egmAction('prepare',{virtualReview:$('egmReview').checked?'1':'0',revision:scene.trajectoryRevision,face:face.id});
 $('egmStart').onclick=()=>egmAction('start',{job:egmState.job,bind:$('egmBind').value.trim(),peer:$('egmPeer').value.trim(),port:$('egmPort').value,virtual:$('egmVirtual').checked?'1':'0',anchor:$('egmAnchor').checked?'1':'0',calibrated:$('egmCalibrated').checked?'1':'0',...Object.fromEntries(['tx','ty','tz','qw','qx','qy','qz'].map(id=>[id,$(id).value]))});
 $('egmStop').onclick=()=>egmAction('stop',{});
 for(const id of['egmVirtual','egmAnchor','egmCalibrated'])$(id).onchange=()=>{if(egmState)showEgm(egmState);};

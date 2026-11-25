@@ -25,9 +25,10 @@ struct Plan {
   V low, high;
   unsigned commands = 0;
   int scope = 0;
+  bool virtualReview = false;
 };
 Plan preflight(
-    const std::string &csv); // Entire CSV + 4 ms protobuf roundtrip; no socket.
+    const std::string &csv, bool virtualReview = false); // Entire CSV + 4 ms protobuf roundtrip; no socket.
 Pose sample(const std::vector<Pose> &, double t);
 std::vector<unsigned char> encode(const Pose &, uint32_t seq, uint32_t tm);
 struct Settings {
@@ -41,7 +42,7 @@ struct Settings {
 class Session {
 public:
   ~Session();
-  void prepare(const std::string &csv);
+  void prepare(const std::string &csv, bool virtualReview = false);
   void invalidate();
   void start(unsigned id, const Settings &);
   void stop(); // Cancel waiting, or hold measured TCP until RAPID stops EGM.

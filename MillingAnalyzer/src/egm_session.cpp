@@ -151,10 +151,11 @@ Pose sample(const std::vector<Pose> &poses, double t) {
   const double k = (t - a.t) / (b.t - a.t);
   return {(1 - k) * a.p + k * b.p, a.q.slerp(k, b.q).normalized(), t, b.motion};
 }
-Plan preflight(const std::string &csv) {
+Plan preflight(const std::string &csv, bool virtualReview) {
   need(csv.size() <= 64 * 1024 * 1024, "CSV exceeds 64 MiB");
   Plan plan;
   plan.csv = csv;
+  plan.virtualReview = virtualReview;
   std::istringstream file(csv);
   std::string line;
   auto getLine = [&] {
@@ -199,7 +200,10 @@ Plan preflight(const std::string &csv) {
         need(std::abs(V(a[10], a[11], a[12]).norm() - 1) < 1e-6,
              "Invalid surface normal");
       }
-      need(a[program ? 12 : 14] == 0 && a[program ? 13 : 15] == 0,
+      const double collision = a[program ? 12 : 14], sweep = a[program ? 13 : 15];
+      need((collision == 0 || collision == 1) && (sweep == 0 || sweep == 1),
+           "Invalid collision flags");
+      need(virtualReview || (collision == 0 && sweep == 0),
            "Collision flagged; replay refused");
       double motion = a[program ? 11 : 16];
       need(motion >= 0 && motion <= 4 && motion == std::floor(motion),
@@ -279,10 +283,10 @@ bool Session::active() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return active_;
 }
-void Session::prepare(const std::string &csv) {
+void Session::prepare(const std::string &csv, bool virtualReview) {
   need(!active(),
        "EGM session active; stop it in RAPID before replacing the path");
-  auto plan = std::make_shared<Plan>(preflight(csv));
+  auto plan = std::make_shared<Plan>(preflight(csv, virtualReview));
   std::lock_guard<std::mutex> lock(mutex_);
   need(!active_, "EGM session active");
   plan_ = std::move(plan);
@@ -327,6 +331,9 @@ void Session::start(unsigned id, const Settings &cfg) {
     std::lock_guard<std::mutex> lock(mutex_);
     need(!active_, "EGM session already active");
     need(plan_ && id == id_, "Prepared trajectory is stale; prepare it again");
+    need(!plan_->virtualReview || (!cfg.calibrated && cfg.virtualConfirmed &&
+             cfg.bindIp == "127.0.0.1" && cfg.peerIp == "127.0.0.1"),
+         "Virtual review requires the local RobotStudio controller on 127.0.0.1");
     plan = plan_;
   }
   if (worker_.joinable())
@@ -401,8 +408,8 @@ void Session::run(std::shared_ptr<const Plan> plan, Settings cfg) {
       message_ = "Listening; start MillingPose6510 in the virtual T_ROB1 (30 s "
                  "timeout)";
     }
-    const Q cutterToTcp(
-        0, 1, 0, 0); // One Rx(pi): planner +Z to holder, demo TCP +Z to tip.
+    // The virtual RAPID tool frame now uses +Z toward the holder.
+    const Q cutterToTcp = cfg.calibrated ? Q(0, 1, 0, 0) : Q::Identity();
     Q rotation = Q::Identity();
     V translation = V::Zero();
     sockaddr_in peer{};
