@@ -243,6 +243,27 @@ with tempfile.TemporaryDirectory() as tmp:
                 pose,_,_,_=exchange(peer,0,pose_bytes([750,0,600],[1,0,0,0]),port)
                 api('/egm/stop');exchange(peer,1,pose,port)
             wait_state({'stopped'})
+            start_module=api('/egm/rapid-start',dict(job=pre['job']),method='GET')
+            import re
+            row=next(csv.DictReader(io.StringIO(saved)))
+            p0=[float(row[k]) for k in ('part_x_mm','part_y_mm','part_z_mm')]
+            q0=[float(row[k]) for k in ('qw','qx','qy','qz')]
+            vals=[float(v) for v in re.findall(r'-?\d+\.\d+',start_module)]
+            assert len(vals)==7 and all(abs(a-b)<1e-7 for a,b in zip(vals,p0+q0))
+            for different_start in (True,False):
+                port=free_port()
+                api('/egm/start',dict(settings,job=pre['job'],port=port,workObject=1,anchor=0))
+                wait_state({'waiting'})
+                with socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as peer:
+                    peer.settimeout(.5)
+                    if different_start:
+                        peer.sendto(feedback(1,pose_bytes([p0[0]+2,*p0[1:]],q0)),('127.0.0.1',port))
+                        assert wait_state({'error'})['sent']==0
+                    else:
+                        pose,_,_,_=exchange(peer,0,pose_bytes(p0,q0),port)
+                        assert status()['translation']==[0,0,0] and status()['rotation']==[1,0,0,0]
+                        api('/egm/stop');exchange(peer,1,pose,port)
+                        wait_state({'stopped'})
             print('STEP -> CAM -> canonical CSV -> protobuf -> UDP: passed (XYZ, rotating quaternion, plunge=4, lifecycle and rejection). RobotStudio not used.')
         finally:
             proc.terminate();proc.wait(timeout=10)

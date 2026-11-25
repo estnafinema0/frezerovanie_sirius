@@ -7,7 +7,9 @@ Copy-Item (Join-Path $Build "$Config/*.dll") $destination
 Copy-Item (Join-Path $Build "$Config/licenses") $destination -Recurse -Force
 Copy-Item "MillingAnalyzer/tools/Start-Milling.cmd" $destination
 Copy-Item "MillingAnalyzer/tools/MillingPose6510.mod" $destination
+Copy-Item "MillingAnalyzer/tools/MillingWorkObject.mod" $destination
 Copy-Item "docs/21-egm-calibrated-commissioning.md" (Join-Path $destination "README-Calibrated-EGM.md")
+Copy-Item "docs/22-robotstudio-workobject.md" (Join-Path $destination "START-WorkObject-RU.md")
 Copy-Item "docs/20-cam-egm-rw6.md" (Join-Path $destination "README-RobotStudio.md")
 $examples = Join-Path $destination "examples"
 New-Item -ItemType Directory -Force $examples | Out-Null

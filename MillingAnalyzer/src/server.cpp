@@ -111,7 +111,7 @@ unsigned identifier(const httplib::Request &r, const char *name) {
   return unsigned(x);
 }
 } // namespace
-int serve(bool openBrowser) {
+int serve(bool openBrowser, const std::filesystem::path &initialFile) {
   try {
     std::random_device random;
     std::ostringstream token;
@@ -123,8 +123,10 @@ int serve(bool openBrowser) {
     server.set_read_timeout(30);
     server.set_write_timeout(120);
     std::mutex mutex;
-    auto model = milling::demo();
-    auto firstScene = milling::analyze(model, milling::Options{});
+    auto model = initialFile.empty() ? milling::demo() : milling::loadStep(initialFile);
+    milling::Options initialOptions;
+    initialOptions.previewOnly = !initialFile.empty();
+    auto firstScene = milling::analyze(model, initialOptions);
     auto exports = faceExports(firstScene, modelTopCorner(firstScene));
     auto initial =
         milling::withOperationCatalog(milling::json(firstScene), model);
@@ -389,6 +391,7 @@ int serve(bool openBrowser) {
           cfg.port = int(port);
           cfg.virtualConfirmed = r.get_param_value("virtual") == "1";
           cfg.anchorConfirmed = r.get_param_value("anchor") == "1";
+          cfg.workObject = r.get_param_value("workObject") == "1";
           cfg.calibrated = r.get_param_value("calibrated") == "1";
           if (cfg.calibrated) {
             auto required = [&](const char *name) {
@@ -403,7 +406,12 @@ int serve(bool openBrowser) {
           egm.start(identifier(r, "job"), cfg);
         } else if (r.path == root + "/egm/stop")
           egm.stop();
-        else if (r.path == root + "/egm/download") {
+        else if (r.path == root + "/egm/rapid-start") {
+          res.set_header("Content-Disposition", "attachment; filename=CamStart.mod");
+          res.set_header("Cache-Control", "no-store");
+          res.set_content(egm.rapidStart(identifier(r, "job")), "application/octet-stream");
+          return;
+        } else if (r.path == root + "/egm/download") {
           res.set_header("Content-Disposition",
                          "attachment; filename=prepared.poses.csv");
           res.set_content(egm.csv(identifier(r, "job")),
@@ -422,6 +430,7 @@ int serve(bool openBrowser) {
     server.Post(root + "/egm/stop", egmApi);
     server.Get(root + "/egm/status", egmApi);
     server.Get(root + "/egm/download", egmApi);
+    server.Get(root + "/egm/rapid-start", egmApi);
     std::string url = origin + root + "/";
     std::cout << "Milling Analyzer local UI: " << url
               << "\nKeep this console open. Ctrl+C stops the viewer service. "

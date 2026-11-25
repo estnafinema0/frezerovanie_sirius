@@ -32,6 +32,16 @@ with tempfile.TemporaryDirectory() as temp:
                 assert page.evaluate('hitTriangles.length === scene.mesh.length && hitTriangles.length > 0')
                 assert page.evaluate('stockOrigin()') == [0, 0, 5]
                 assert not errors, errors
+                # Open the same Unicode path via the native startup path as well.
+                with subprocess.Popen([package / 'MillingAnalyzer.exe','--serve','--no-open','--step',model],
+                                      cwd=temp,stdout=subprocess.PIPE,text=True) as direct:
+                    try:
+                        page.goto(direct.stdout.readline().split()[-1])
+                        expect(page.locator('#counts')).to_contain_text('6 граней')
+                        assert page.evaluate('hitTriangles.length === scene.mesh.length && hitTriangles.length > 0')
+                        expect(page.locator('#egmWorkObject')).to_be_checked()
+                    finally:
+                        direct.terminate()
                 browser.close()
         finally:
             app.terminate()

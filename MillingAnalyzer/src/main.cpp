@@ -19,7 +19,16 @@
 
 int run(std::vector<std::string> args) {
   if (args.size() == 1 || (args.size() >= 2 && args[1] == "--serve"))
-    return serve(args.size() < 3 || args[2] != "--no-open");
+    {
+      bool openBrowser = true;
+      std::filesystem::path initialFile;
+      for (size_t i = 2; i < args.size(); ++i) {
+        if (args[i] == "--no-open") openBrowser = false;
+        else if (args[i] == "--step" && i + 1 < args.size()) initialFile = std::filesystem::u8path(args[++i]);
+        else { std::cerr << "Usage: --serve [--no-open] [--step file.step]\n"; return 1; }
+      }
+      return serve(openBrowser, initialFile);
+    }
   try {
     milling::Options options;
     bool demo = false, bowl = false, open = false, program = false,

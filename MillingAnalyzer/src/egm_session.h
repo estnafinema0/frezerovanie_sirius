@@ -34,7 +34,7 @@ std::vector<unsigned char> encode(const Pose &, uint32_t seq, uint32_t tm);
 struct Settings {
   std::string bindIp = "127.0.0.1", peerIp = "127.0.0.1";
   int port = 6510;
-  bool calibrated = false;
+  bool calibrated = false, workObject = false;
   V partOrigin = V::Zero();
   Q partRotation = Q::Identity();
   bool virtualConfirmed = false, anchorConfirmed = false;
@@ -49,6 +49,7 @@ public:
   bool active() const;
   std::string status() const;
   std::string csv(unsigned id) const;
+  std::string rapidStart(unsigned id) const;
 
 private:
   void run(std::shared_ptr<const Plan>, Settings);

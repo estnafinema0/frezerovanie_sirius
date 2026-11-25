@@ -311,14 +311,32 @@ std::string Session::csv(unsigned id) const {
   need(plan_ && id == id_, "Prepared trajectory is stale; prepare it again");
   return plan_->csv;
 }
+std::string Session::rapidStart(unsigned id) const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  need(plan_ && id == id_, "Prepared trajectory is stale; prepare it again");
+  const auto &p = plan_->poses.front();
+  std::ostringstream out;
+  out.imbue(std::locale::classic());
+  out << std::fixed << std::setprecision(8)
+      << "MODULE CamStart\r\n    CONST pose camStartPose:=[["
+      << p.p.x() << ',' << p.p.y() << ',' << p.p.z() << "],["
+      << p.q.w() << ',' << p.q.x() << ',' << p.q.y() << ',' << p.q.z()
+      << "]];\r\n    CONST num camRunSeconds:="
+      << int(std::ceil(plan_->poses.back().t)) + 3 << ";\r\nENDMODULE\r\n";
+  return out.str();
+}
 void Session::start(unsigned id, const Settings &cfg) {
+  if (cfg.workObject)
+    need(cfg.virtualConfirmed && !cfg.calibrated && !cfg.anchorConfirmed &&
+             cfg.bindIp == "127.0.0.1" && cfg.peerIp == "127.0.0.1",
+         "Taught work object requires the local virtual controller");
   if (cfg.calibrated) {
     need(!cfg.virtualConfirmed && !cfg.anchorConfirmed &&
              cfg.partOrigin.allFinite() &&
              std::abs(cfg.partRotation.norm() - 1) <= 1e-6,
          "Calibrated mode requires a finite origin and a unit quaternion");
   }
-  need(cfg.calibrated || (cfg.virtualConfirmed && cfg.anchorConfirmed),
+  need(cfg.workObject || cfg.calibrated || (cfg.virtualConfirmed && cfg.anchorConfirmed),
        "Confirm a virtual controller and demonstration anchoring to its first "
        "feedback");
   need(cfg.port >= 1024 && cfg.port <= 65535, "UDP port must be 1024..65535");
@@ -374,6 +392,7 @@ std::string Session::status() const {
       << ",\"bindIp\":" << quote(settings_.bindIp)
       << ",\"peerIp\":" << quote(settings_.peerIp)
       << ",\"port\":" << settings_.port;
+  out << ",\"workObject\":" << (settings_.workObject ? "true" : "false");
   if (plan_) {
     out << ",\"scope\":" << plan_->scope << ",\"poses\":" << plan_->poses.size()
         << ",\"commands\":" << plan_->commands
@@ -495,7 +514,7 @@ void Session::run(std::shared_ptr<const Plan> plan, Settings cfg) {
       const bool firstFeedback = !anchored;
       if (firstFeedback) {
         const auto &first = plan->poses.front();
-        if (cfg.calibrated) {
+        if (cfg.calibrated || cfg.workObject) {
           rotation = cfg.partRotation.normalized();
           translation = cfg.partOrigin;
           const Q initial = (rotation * first.q).normalized();
@@ -530,7 +549,7 @@ void Session::run(std::shared_ptr<const Plan> plan, Settings cfg) {
         baseLow_ = low;
         baseHigh_ = high;
         state_ = "running";
-        message_ = cfg.calibrated
+        message_ = cfg.workObject ? "Streaming poses in taught camStock" : cfg.calibrated
                        ? "Streaming calibrated XYZ + quaternion"
                        : "Streaming XYZ + quaternion to the confirmed virtual controller";
       }
@@ -562,7 +581,7 @@ void Session::run(std::shared_ptr<const Plan> plan, Settings cfg) {
               "Timed EGM session did not end; check runSeconds and final pose");
         }
       }
-      if (cfg.calibrated && firstFeedback)
+      if ((cfg.calibrated || cfg.workObject) && firstFeedback)
         target = {p, q, t, 0};
       auto bytes = encode(target, seq++, uint32_t(t * 1000));
       need(sendto(udp.s, reinterpret_cast<const char *>(bytes.data()),
