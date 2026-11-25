@@ -18,11 +18,19 @@
 <p class="muted">Передаётся вся рассчитанная программа или вся выбранная грань, вместе с переходами. EGM получает позы по UDP, а CSV остаётся файлом проверки.</p>
 <button id="egmPrepare" class="primary">Проверить и подготовить выбранную траекторию</button>
 <pre id="egmPlan">Сначала рассчитайте траекторию.</pre><a id="egmDownload" hidden>Скачать подготовленные позы CSV</a>
-<div class="settings"><label>IP этого компьютера<input id="egmBind" value="127.0.0.1" inputmode="decimal"></label><label>IP виртуального контроллера<input id="egmPeer" value="127.0.0.1" inputmode="decimal"></label><label>Локальный UDP-порт<input id="egmPort" type="number" min="1024" max="65535" value="6510"></label></div>
+<div class="settings"><label>IP этого компьютера<input id="egmBind" value="127.0.0.1" inputmode="decimal"></label><label>IP контроллера<input id="egmPeer" value="127.0.0.1" inputmode="decimal"></label><label>Локальный UDP-порт<input id="egmPort" type="number" min="1024" max="65535" value="6510"></label></div>
 <p class="muted">Если программа и RobotStudio на одном ПК — оставьте 127.0.0.1. В UCdevice укажите IP компьютера с этой программой и этот порт. После подготовки задайте показанное runSeconds в RAPID.</p>
 <label><input id="egmVirtual" type="checkbox"> Это виртуальный IRB1600 с отдельным MillingPose6510, не физический робот</label>
 <label><input id="egmAnchor" type="checkbox"> Совместить первую позу с первым откликом VC. Это демонстрационное размещение, не калибровка детали</label>
 <p class="muted">TCP этого профиля: виртуальный toolPencil 280 мм. Разворот системы инструмента Rx(180°) применяется один раз; длина TCP к координатам не прибавляется. Для шпинделя требуется отдельная калибровка.</p>
+<label><input id="egmCalibrated" type="checkbox"> Измеренная привязка детали. TCP и оси инструмента проверены</label>
+<div class="settings"><label>Начало детали X, мм<input id="tx" type="number" step="any"></label>
+<label>Y, мм<input id="ty" type="number" step="any"></label>
+<label>Z, мм<input id="tz" type="number" step="any"></label>
+<label>Поворот детали w<input id="qw" type="number" step="any"></label>
+<label>x<input id="qx" type="number" step="any"></label>
+<label>y<input id="qy" type="number" step="any"></label>
+<label>z<input id="qz" type="number" step="any"></label></div>
 <div class="row"><button id="egmStart" class="primary" disabled>Начать ожидание EGM</button><button id="egmStop" disabled>Удержать / отменить</button></div>
 <div id="egmStatus" class="alert" role="status" aria-live="polite">Соединение не открыто.</div><pre id="egmPlacement" hidden></pre>
 <p class="muted">«Удержать» фиксирует измеренную позу, пока RAPID не остановит EGM. Это не аварийная остановка. Закрывайте приложение после остановки виртуального контроллера.</p></section><h2>Просмотр модели и операций</h2><p class="muted">Выбор грани ниже меняет просмотр. Автоматический расчёт всегда обрабатывает модель целиком в пределах доступности.</p><select id="face" aria-label="Выбор грани"></select><div id="counts"></div><div id="status" class="alert"></div>
@@ -131,18 +139,18 @@ function showEgm(s){
  $('egmDownload').hidden=!s.poses;if(s.poses)$('egmDownload').href=api+'/egm/download?job='+s.job;
  $('egmStatus').textContent=`${egmStates[s.state]||s.state} · отправлено ${s.sent}\n${egmError||s.message}`;$('egmStatus').classList.toggle('bad',s.state==='error'||!!egmError);
  $('egmPrepare').disabled=busy||s.active;
- $('egmStart').disabled=busy||s.active||!s.poses||!$('egmVirtual').checked||!$('egmAnchor').checked;
+ $('egmStart').disabled=busy||s.active||!s.poses||($('egmCalibrated').checked?$('egmVirtual').checked||$('egmAnchor').checked:!$('egmVirtual').checked||!$('egmAnchor').checked);
  $('egmStop').disabled=!s.active;
- for(const id of['egmBind','egmPeer','egmPort','egmVirtual','egmAnchor'])$(id).disabled=s.active;
+ for(const id of['egmBind','egmPeer','egmPort','egmVirtual','egmAnchor','egmCalibrated','tx','ty','tz','qw','qx','qy','qz'])$(id).disabled=s.active;
  $('egmPlacement').hidden=!s.anchored;
- if(s.anchored)$('egmPlacement').textContent=`Демонстрационное размещение\nПеренос, мм: [${vector(s.translation)}]\nПоворот wxyz: [${vector(s.rotation)}]\nГраницы в базе (огибающий блок):\n[${vector(s.baseMin)}] → [${vector(s.baseMax)}]`;
+ if(s.anchored)$('egmPlacement').textContent=`Размещение\nПеренос, мм: [${vector(s.translation)}]\nПоворот wxyz: [${vector(s.rotation)}]\nГраницы в базе (огибающий блок):\n[${vector(s.baseMin)}] → [${vector(s.baseMax)}]`;
 }
 async function pollEgm(){if(!api||egmPolling)return;egmPolling=true;try{const r=await fetch(api+'/egm/status',{cache:'no-store'});if(r.ok)showEgm(await r.json());}catch(e){$('egmStatus').textContent='Нет связи с локальным приложением. Проверьте его окно и состояние EGM в RobotStudio.';}finally{egmPolling=false;}}
 async function egmAction(route,params){egmError='';try{const r=await fetch(api+'/egm/'+route+'?'+new URLSearchParams(params),{method:'POST'}),data=await r.json();if(!r.ok)throw Error(data.error||'Ошибка EGM');showEgm(data);}catch(e){egmError=e.message;$('egmStatus').textContent='EGM: '+e.message;$('egmStatus').classList.add('bad');}}
 $('egmPrepare').onclick=()=>egmAction('prepare',{revision:scene.trajectoryRevision,face:face.id});
-$('egmStart').onclick=()=>egmAction('start',{job:egmState.job,bind:$('egmBind').value.trim(),peer:$('egmPeer').value.trim(),port:$('egmPort').value,virtual:$('egmVirtual').checked?'1':'0',anchor:$('egmAnchor').checked?'1':'0'});
+$('egmStart').onclick=()=>egmAction('start',{job:egmState.job,bind:$('egmBind').value.trim(),peer:$('egmPeer').value.trim(),port:$('egmPort').value,virtual:$('egmVirtual').checked?'1':'0',anchor:$('egmAnchor').checked?'1':'0',calibrated:$('egmCalibrated').checked?'1':'0',...Object.fromEntries(['tx','ty','tz','qw','qx','qy','qz'].map(id=>[id,$(id).value]))});
 $('egmStop').onclick=()=>egmAction('stop',{});
-for(const id of['egmVirtual','egmAnchor'])$(id).onchange=()=>{if(egmState)showEgm(egmState);};
+for(const id of['egmVirtual','egmAnchor','egmCalibrated'])$(id).onchange=()=>{if(egmState)showEgm(egmState);};
 if(api){$('egmPanel').hidden=false;pollEgm();setInterval(pollEgm,500);}
 
 function animate(time){if(playing&&current()){let duration=activePath().poses.at(-1).t;progress=Math.min(1,progress+(time-lastTime)/1000*(+$('speed').value)/Math.max(duration,.001));$('seek').value=progress*1000;if(progress>=1){playing=false;$('play').textContent='▶ Играть';}draw();}lastTime=time;requestAnimationFrame(animate);}new ResizeObserver(draw).observe(canvas.parentElement);setScene(scene);modelInfo();geometryChoices();$('staticNotice').hidden=!!api;requestAnimationFrame(animate);

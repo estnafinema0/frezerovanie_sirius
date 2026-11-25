@@ -308,7 +308,13 @@ std::string Session::csv(unsigned id) const {
   return plan_->csv;
 }
 void Session::start(unsigned id, const Settings &cfg) {
-  need(cfg.virtualConfirmed && cfg.anchorConfirmed,
+  if (cfg.calibrated) {
+    need(!cfg.virtualConfirmed && !cfg.anchorConfirmed &&
+             cfg.partOrigin.allFinite() &&
+             std::abs(cfg.partRotation.norm() - 1) <= 1e-6,
+         "Calibrated mode requires a finite origin and a unit quaternion");
+  }
+  need(cfg.calibrated || (cfg.virtualConfirmed && cfg.anchorConfirmed),
        "Confirm a virtual controller and demonstration anchoring to its first "
        "feedback");
   need(cfg.port >= 1024 && cfg.port <= 65535, "UDP port must be 1024..65535");
@@ -481,11 +487,20 @@ void Session::run(std::shared_ptr<const Plan> plan, Settings cfg) {
       lastFeedback = now;
       peer = source;
       robotSeq = feedback.header.seqno;
-      if (!anchored) {
-        rotation =
-            (q * cutterToTcp.conjugate() * plan->poses.front().q.conjugate())
-                .normalized();
-        translation = p - rotation * plan->poses.front().p;
+      const bool firstFeedback = !anchored;
+      if (firstFeedback) {
+        const auto &first = plan->poses.front();
+        if (cfg.calibrated) {
+          rotation = cfg.partRotation.normalized();
+          translation = cfg.partOrigin;
+          const Q initial = (rotation * first.q * cutterToTcp).normalized();
+          need((rotation * first.p + translation - p).norm() <= .1 &&
+                   initial.angularDistance(q) <= .00872665,
+               "TCP differs from calibrated start (>0.1 mm or >0.5 deg)");
+        } else {
+          rotation = (q * cutterToTcp.conjugate() * first.q.conjugate()).normalized();
+          translation = p - rotation * first.p;
+        }
         start = now;
         anchored = true;
         V low = V::Constant(std::numeric_limits<double>::infinity()),
@@ -510,8 +525,9 @@ void Session::run(std::shared_ptr<const Plan> plan, Settings cfg) {
         baseLow_ = low;
         baseHigh_ = high;
         state_ = "running";
-        message_ =
-            "Streaming XYZ + quaternion to the confirmed virtual controller";
+        message_ = cfg.calibrated
+                       ? "Streaming calibrated XYZ + quaternion"
+                       : "Streaming XYZ + quaternion to the confirmed virtual controller";
       }
       double t = age(start);
       if (stop_ && !holding) {
@@ -541,6 +557,8 @@ void Session::run(std::shared_ptr<const Plan> plan, Settings cfg) {
               "Timed EGM session did not end; check runSeconds and final pose");
         }
       }
+      if (cfg.calibrated && firstFeedback)
+        target = {p, q, t, 0};
       auto bytes = encode(target, seq++, uint32_t(t * 1000));
       need(sendto(udp.s, reinterpret_cast<const char *>(bytes.data()),
                   int(bytes.size()), 0, reinterpret_cast<sockaddr *>(&peer),

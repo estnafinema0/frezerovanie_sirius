@@ -376,6 +376,17 @@ int serve(bool openBrowser) {
           cfg.port = int(port);
           cfg.virtualConfirmed = r.get_param_value("virtual") == "1";
           cfg.anchorConfirmed = r.get_param_value("anchor") == "1";
+          cfg.calibrated = r.get_param_value("calibrated") == "1";
+          if (cfg.calibrated) {
+            auto required = [&](const char *name) {
+              if (!r.has_param(name) || r.get_param_value(name).empty())
+                throw std::runtime_error(std::string("Missing calibration field: ") + name);
+              return parameter(r, name, 0);
+            };
+            cfg.partOrigin = milling::egm::V(required("tx"), required("ty"), required("tz"));
+            cfg.partRotation = milling::egm::Q(required("qw"), required("qx"),
+                                                required("qy"), required("qz"));
+          }
           egm.start(identifier(r, "job"), cfg);
         } else if (r.path == root + "/egm/stop")
           egm.stop();

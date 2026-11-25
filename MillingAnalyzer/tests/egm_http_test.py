@@ -111,6 +111,32 @@ with tempfile.TemporaryDirectory() as tmp:
                 except socket.timeout:pass
             assert status()['state']=='waiting'
             api('/egm/stop');wait_state({'stopped'})
+            calibrated = dict(settings, virtual=0, anchor=0, calibrated=1,
+                              job=job, tx=100, ty=200, tz=300, qw=1, qx=0, qy=0, qz=0)
+            api('/egm/start', dict(calibrated, port=6510, qw=2), expected=400)
+            for mismatch in (True, False):
+                port = free_port()
+                api('/egm/start', dict(calibrated, port=port))
+                wait_state({'waiting'})
+                first = rows[0]
+                p0 = [calibrated['t'+a]+float(first['part_'+a+'_mm']) for a in 'xyz']
+                q0 = qmul([float(first[k]) for k in ('qw','qx','qy','qz')], [0,1,0,0])
+                with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as peer:
+                    peer.settimeout(.2)
+                    if mismatch:
+                        peer.sendto(feedback(0, pose_bytes([p0[0]+1,*p0[1:]], q0)), ('127.0.0.1',port))
+                        assert 'calibrated start' in wait_state({'error'})['message']
+                        assert status()['sent'] == 0
+                        try: peer.recv(4096); raise AssertionError('sent with invalid start')
+                        except socket.timeout: pass
+                    else:
+                        _, p, q, _ = exchange(peer, 0, pose_bytes(p0,q0), port)
+                        assert max(abs(a-b) for a,b in zip(p,p0)) < 1e-8
+                        assert max(abs(a-b) for a,b in zip(q,q0)) < 1e-8
+                        assert status()['translation'] == [100,200,300]
+                        api('/egm/stop')
+                        exchange(peer, 1, pose_bytes(p0,q0), port)
+                        wait_state({'stopped'})
             port=free_port();start(job,port)
             api('/load',dict(format='step'),step.read_bytes(),expected=400)
             api('/calculate',dict(face=floor),expected=400)
