@@ -66,19 +66,27 @@ milling::Options options(const httplib::Request &r, bool whole = false) {
 struct ExportPath {
   milling::Pass path;
   std::string csv, error;
+  bool programInterference = false;
 };
-std::map<int, ExportPath> faceExports(const milling::Scene &scene) {
+std::map<int, ExportPath> faceExports(const milling::Scene &scene, const milling::V &corner) {
   std::map<int, ExportPath> out;
   for (const auto &face : scene.faces)
     out[face.id] = {face.trajectory, "",
                     face.connectionError.empty() ? face.error
                                                  : face.connectionError};
+  for (auto &item : out)
+    for (auto &pose : item.second.path.poses) {
+      pose.p -= corner;
+      pose.q = milling::tcpOrientation(pose.q);
+    }
   return out;
 }
-std::string exportCsv(int face, const ExportPath &entry) {
+std::string exportCsv(int face, const ExportPath &entry, bool virtualReview) {
   if (!entry.error.empty())
     throw std::runtime_error(entry.error);
-  if (entry.path.segmentCollision)
+  if (entry.programInterference && !virtualReview)
+    throw std::runtime_error("Program collision or remaining-stock interference; EGM preparation refused");
+  if (entry.path.segmentCollision && !virtualReview)
     throw std::runtime_error("Swept-path collision; EGM preparation refused");
   if (!entry.csv.empty())
     return entry.csv;
@@ -103,8 +111,17 @@ unsigned identifier(const httplib::Request &r, const char *name) {
   return unsigned(x);
 }
 } // namespace
-int serve(bool openBrowser) {
+int serve(bool openBrowser, const std::filesystem::path &initialFile,
+          const std::filesystem::path &ethernetFile) {
   try {
+    std::string localIp, controllerIp;
+    if (!ethernetFile.empty()) {
+      std::ifstream profile(ethernetFile);
+      std::string extra;
+      if (!(profile >> localIp >> controllerIp) || (profile >> extra))
+        throw std::runtime_error("Enter the PC Ethernet IPv4 on line 1 and the IRC5 IPv4 on line 2 of Ethernet-IP.txt");
+      milling::egm::validateEthernetPair(localIp, controllerIp);
+    }
     std::random_device random;
     std::ostringstream token;
     for (int i = 0; i < 4; ++i)
@@ -115,9 +132,11 @@ int serve(bool openBrowser) {
     server.set_read_timeout(30);
     server.set_write_timeout(120);
     std::mutex mutex;
-    auto model = milling::demo();
-    auto firstScene = milling::analyze(model, milling::Options{});
-    auto exports = faceExports(firstScene);
+    auto model = initialFile.empty() ? milling::demo() : milling::loadStep(initialFile);
+    milling::Options initialOptions;
+    initialOptions.previewOnly = !initialFile.empty();
+    auto firstScene = milling::analyze(model, initialOptions);
+    auto exports = faceExports(firstScene, modelTopCorner(firstScene));
     auto initial =
         milling::withOperationCatalog(milling::json(firstScene), model);
     milling::egm::Session egm;
@@ -145,6 +164,11 @@ int serve(bool openBrowser) {
                [&](const httplib::Request &, httplib::Response &res) {
                  std::lock_guard<std::mutex> lock(mutex);
                  std::string page = viewerTemplate;
+                 if (!ethernetFile.empty()) {
+                   const std::string marker = "/*ethernet-profile*/null";
+                   page.replace(page.find(marker), marker.size(),
+                                "[\"" + localIp + "\",\"" + controllerIp + "\"]");
+                 }
                  auto p = page.find("@@SCENE@@");
                  page.replace(p, 9, initial);
                  p = page.find("@@API@@");
@@ -168,7 +192,9 @@ int serve(bool openBrowser) {
           throw std::runtime_error("EGM session active; end it in RobotStudio "
                                    "before changing the trajectory");
         milling::Scene result;
-        std::string programExport, programError;
+        std::string programExport;
+        milling::V stockCorner = milling::V::Zero();
+        bool programInterference = false;
         auto nextModel = model;
         std::string data;
         if (r.path == root + "/reset-trajectory") {
@@ -184,26 +210,31 @@ int serve(bool openBrowser) {
             throw std::runtime_error("Supported files: STEP, STP, bpatch");
           if (r.body.empty())
             throw std::runtime_error("Empty model");
-          auto folder = std::filesystem::temp_directory_path() /
-                        std::filesystem::u8path("milling-" + token.str());
-          std::filesystem::create_directories(folder);
-          struct Cleanup {
-            std::filesystem::path file;
-            ~Cleanup() {
-              std::error_code ec;
-              std::filesystem::remove(file, ec);
-              std::filesystem::remove(file.parent_path(), ec);
+          milling::Model candidate;
+          if (format == "step") {
+            std::istringstream stream(r.body);
+            candidate = milling::loadUploadedStep(stream);
+          } else {
+            auto folder = std::filesystem::temp_directory_path() /
+                          std::filesystem::u8path("milling-" + token.str());
+            std::filesystem::create_directories(folder);
+            struct Cleanup {
+              std::filesystem::path file;
+              ~Cleanup() {
+                std::error_code ec;
+                std::filesystem::remove(file, ec);
+                std::filesystem::remove(file.parent_path(), ec);
+              }
+            } cleanup{folder / ("input." + format)};
+            {
+              std::ofstream f(cleanup.file, std::ios::binary);
+              f.write(r.body.data(), r.body.size());
+              f.flush();
+              if (!f)
+                throw std::runtime_error("Cannot stage local model");
             }
-          } cleanup{folder / ("input." + format)};
-          {
-            std::ofstream f(cleanup.file, std::ios::binary);
-            f.write(r.body.data(), r.body.size());
-            f.flush();
-            if (!f)
-              throw std::runtime_error("Cannot stage local model");
+            candidate = milling::loadPatch(cleanup.file);
           }
-          auto candidate = format == "step" ? milling::loadStep(cleanup.file)
-                                            : milling::loadPatch(cleanup.file);
           milling::Options o;
           o.previewOnly = true;
           result = milling::analyze(candidate, o);
@@ -291,11 +322,10 @@ int serve(bool openBrowser) {
                 milling::planOperations(nextModel, result, o, cfg.stock, specs);
           } else
             program = milling::planProgram(nextModel, result, o, cfg);
+          stockCorner = program.settings.stock.topCorner();
           programExport = milling::programCsv(program);
-          if (program.collisions || program.stockCollisions ||
-              program.trajectory.segmentCollision)
-            programError = "Program collision or remaining-stock interference; "
-                           "EGM preparation refused";
+          programInterference = program.collisions || program.stockCollisions ||
+                                program.trajectory.segmentCollision;
           data = specs.empty()
                      ? milling::programJson(result, program)
                      : milling::operationPlanJson(result, program, specs);
@@ -310,15 +340,13 @@ int serve(bool openBrowser) {
         if (r.path == root + "/load" || r.path == root + "/demo" ||
             r.path == root + "/program-demo")
           ++modelRevision;
-        auto nextExports = faceExports(result);
+        auto nextExports = faceExports(result, programExport.empty() ? modelTopCorner(result) : stockCorner);
         if (!programExport.empty()) {
           // A face view must not hide a program-level stock/collision
           // rejection.
-          if (!programError.empty())
-            for (auto &entry : nextExports)
-              entry.second.error = programError;
-          nextExports[0] = {
-              {}, std::move(programExport), std::move(programError)};
+          for (auto &entry : nextExports)
+            entry.second.programInterference = programInterference;
+          nextExports[0] = {{}, std::move(programExport), "", programInterference};
         }
         egm.invalidate();
         ++trajectoryRevision;
@@ -365,7 +393,8 @@ int serve(bool openBrowser) {
           if (found == exports.end())
             throw std::runtime_error(
                 "No calculated trajectory for this face/program");
-          egm.prepare(exportCsv(found->first, found->second));
+          const bool virtualReview = r.get_param_value("virtualReview") == "1";
+          egm.prepare(exportCsv(found->first, found->second, virtualReview), virtualReview);
         } else if (r.path == root + "/egm/start") {
           milling::egm::Settings cfg;
           cfg.bindIp = r.get_param_value("bind");
@@ -376,10 +405,31 @@ int serve(bool openBrowser) {
           cfg.port = int(port);
           cfg.virtualConfirmed = r.get_param_value("virtual") == "1";
           cfg.anchorConfirmed = r.get_param_value("anchor") == "1";
+          cfg.workObject = r.get_param_value("workObject") == "1";
+          cfg.calibrated = r.get_param_value("calibrated") == "1";
+          if (!ethernetFile.empty() &&
+              (cfg.bindIp != localIp || cfg.peerIp != controllerIp || cfg.port != 6510 ||
+               !cfg.calibrated || cfg.workObject || cfg.virtualConfirmed || cfg.anchorConfirmed))
+            throw std::runtime_error("Start settings differ from the fixed Ethernet profile");
+          if (cfg.calibrated) {
+            auto required = [&](const char *name) {
+              if (!r.has_param(name) || r.get_param_value(name).empty())
+                throw std::runtime_error(std::string("Missing calibration field: ") + name);
+              return parameter(r, name, 0);
+            };
+            cfg.partOrigin = milling::egm::V(required("tx"), required("ty"), required("tz"));
+            cfg.partRotation = milling::egm::Q(required("qw"), required("qx"),
+                                                required("qy"), required("qz"));
+          }
           egm.start(identifier(r, "job"), cfg);
         } else if (r.path == root + "/egm/stop")
           egm.stop();
-        else if (r.path == root + "/egm/download") {
+        else if (r.path == root + "/egm/rapid-start") {
+          res.set_header("Content-Disposition", "attachment; filename=CamStart.mod");
+          res.set_header("Cache-Control", "no-store");
+          res.set_content(egm.rapidStart(identifier(r, "job")), "application/octet-stream");
+          return;
+        } else if (r.path == root + "/egm/download") {
           res.set_header("Content-Disposition",
                          "attachment; filename=prepared.poses.csv");
           res.set_content(egm.csv(identifier(r, "job")),
@@ -398,6 +448,7 @@ int serve(bool openBrowser) {
     server.Post(root + "/egm/stop", egmApi);
     server.Get(root + "/egm/status", egmApi);
     server.Get(root + "/egm/download", egmApi);
+    server.Get(root + "/egm/rapid-start", egmApi);
     std::string url = origin + root + "/";
     std::cout << "Milling Analyzer local UI: " << url
               << "\nKeep this console open. Ctrl+C stops the viewer service. "

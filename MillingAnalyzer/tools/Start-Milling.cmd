@@ -1,4 +1,8 @@
 @echo off
 cd /d "%~dp0"
-MillingAnalyzer.exe --serve
+if "%~1"=="" (
+  MillingAnalyzer.exe --serve
+) else (
+  MillingAnalyzer.exe --serve --step "%~f1"
+)
 pause

@@ -6,6 +6,7 @@ struct StockSettings {
   V low = V(-2, -2, 0), high = V(22, 22, 6);
   double cell = .5, stepDown = 1, stepOver = 1, allowance = .3, roughFeed = 10;
   bool plungeConfirmed = false;
+  V topCorner() const { return {low.x(), low.y(), high.z()}; }
   void validate(const Options &) const;
 };
 // Bounded dexel grid: an upper envelope of the triangulated target, not a

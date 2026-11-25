@@ -1,2 +1,4 @@
 #pragma once
-int serve(bool openBrowser);
+#include <filesystem>
+int serve(bool openBrowser, const std::filesystem::path &initialFile,
+          const std::filesystem::path &ethernetFile);

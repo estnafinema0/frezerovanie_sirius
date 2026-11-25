@@ -19,7 +19,17 @@
 
 int run(std::vector<std::string> args) {
   if (args.size() == 1 || (args.size() >= 2 && args[1] == "--serve"))
-    return serve(args.size() < 3 || args[2] != "--no-open");
+    {
+      bool openBrowser = true;
+      std::filesystem::path initialFile, ethernetFile;
+      for (size_t i = 2; i < args.size(); ++i) {
+        if (args[i] == "--no-open") openBrowser = false;
+        else if (args[i] == "--ethernet-profile" && i + 1 < args.size()) ethernetFile = std::filesystem::u8path(args[++i]);
+        else if (args[i] == "--step" && i + 1 < args.size()) initialFile = std::filesystem::u8path(args[++i]);
+        else { std::cerr << "Usage: --serve [--no-open] [--step file.step]\n"; return 1; }
+      }
+      return serve(openBrowser, initialFile, ethernetFile);
+    }
   try {
     milling::Options options;
     bool demo = false, bowl = false, open = false, program = false,
@@ -190,6 +200,7 @@ int run(std::vector<std::string> args) {
     write("preview.html", html);
     if (!programCsv.empty())
       write("program.poses.csv", programCsv);
+    const auto corner = program ? job.stock.topCorner() : milling::modelTopCorner(scene);
     for (const auto &f : scene.faces) {
       if (f.trajectory.poses.empty())
         continue;
@@ -198,12 +209,15 @@ int run(std::vector<std::string> args) {
           << "face_id,pass_id,sample_id,part_x_mm,part_y_mm,part_z_mm,qw,qx,qy,"
              "qz,nx,ny,nz,time_s,collision,sweep_collision,motion\n";
       size_t k = 0;
-      for (const auto &p : f.trajectory.poses)
-        csv << f.id << ",0," << k++ << ',' << p.p.x() << ',' << p.p.y() << ','
-            << p.p.z() << ',' << p.q.w() << ',' << p.q.x() << ',' << p.q.y()
-            << ',' << p.q.z() << ',' << p.n.x() << ',' << p.n.y() << ','
+      for (const auto &p : f.trajectory.poses) {
+        const milling::V position = p.p - corner;
+        const auto tcp = milling::tcpOrientation(p.q);
+        csv << f.id << ",0," << k++ << ',' << position.x() << ',' << position.y() << ','
+            << position.z() << ',' << tcp.w() << ',' << tcp.x() << ',' << tcp.y()
+            << ',' << tcp.z() << ',' << p.n.x() << ',' << p.n.y() << ','
             << p.n.z() << ',' << p.t << ',' << p.collision << ','
             << p.sweepCollision << ',' << p.motion << '\n';
+      }
       write(("face-" + std::to_string(f.id) + ".poses.csv").c_str(), csv.str());
     }
 

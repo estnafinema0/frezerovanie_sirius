@@ -112,6 +112,15 @@ void vectorJson(std::ostream &out, const V &p) {
   out << '[' << p.x() << ',' << p.y() << ',' << p.z() << ']';
 }
 } // namespace
+void validateEthernetPair(const std::string &local, const std::string &peer) {
+  for (const auto *value : {&local, &peer})
+    need(value->size() <= 15 && value->find_first_not_of("0123456789.") == std::string::npos,
+         "Enter each Ethernet IPv4 in dotted decimal notation");
+  const auto a = ntohl(ip(local, false).s_addr), b = ntohl(ip(peer, false).s_addr);
+  need(a != b && (a >> 24) != 127 && (b >> 24) != 127 &&
+           (a >> 24) != 0 && (b >> 24) != 0,
+       "Ethernet profile requires distinct LAN IPv4 addresses for PC and IRC5");
+}
 
 std::vector<unsigned char> encode(const Pose &p, uint32_t seq, uint32_t tm) {
   EgmSensor packet = EgmSensor_init_zero;
@@ -151,10 +160,11 @@ Pose sample(const std::vector<Pose> &poses, double t) {
   const double k = (t - a.t) / (b.t - a.t);
   return {(1 - k) * a.p + k * b.p, a.q.slerp(k, b.q).normalized(), t, b.motion};
 }
-Plan preflight(const std::string &csv) {
+Plan preflight(const std::string &csv, bool virtualReview) {
   need(csv.size() <= 64 * 1024 * 1024, "CSV exceeds 64 MiB");
   Plan plan;
   plan.csv = csv;
+  plan.virtualReview = virtualReview;
   std::istringstream file(csv);
   std::string line;
   auto getLine = [&] {
@@ -199,7 +209,10 @@ Plan preflight(const std::string &csv) {
         need(std::abs(V(a[10], a[11], a[12]).norm() - 1) < 1e-6,
              "Invalid surface normal");
       }
-      need(a[program ? 12 : 14] == 0 && a[program ? 13 : 15] == 0,
+      const double collision = a[program ? 12 : 14], sweep = a[program ? 13 : 15];
+      need((collision == 0 || collision == 1) && (sweep == 0 || sweep == 1),
+           "Invalid collision flags");
+      need(virtualReview || (collision == 0 && sweep == 0),
            "Collision flagged; replay refused");
       double motion = a[program ? 11 : 16];
       need(motion >= 0 && motion <= 4 && motion == std::floor(motion),
@@ -279,10 +292,10 @@ bool Session::active() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return active_;
 }
-void Session::prepare(const std::string &csv) {
+void Session::prepare(const std::string &csv, bool virtualReview) {
   need(!active(),
        "EGM session active; stop it in RAPID before replacing the path");
-  auto plan = std::make_shared<Plan>(preflight(csv));
+  auto plan = std::make_shared<Plan>(preflight(csv, virtualReview));
   std::lock_guard<std::mutex> lock(mutex_);
   need(!active_, "EGM session active");
   plan_ = std::move(plan);
@@ -307,8 +320,32 @@ std::string Session::csv(unsigned id) const {
   need(plan_ && id == id_, "Prepared trajectory is stale; prepare it again");
   return plan_->csv;
 }
+std::string Session::rapidStart(unsigned id) const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  need(plan_ && id == id_, "Prepared trajectory is stale; prepare it again");
+  const auto &p = plan_->poses.front();
+  std::ostringstream out;
+  out.imbue(std::locale::classic());
+  out << std::fixed << std::setprecision(8)
+      << "MODULE CamStart\r\n    CONST pose camStartPose:=[["
+      << p.p.x() << ',' << p.p.y() << ',' << p.p.z() << "],["
+      << p.q.w() << ',' << p.q.x() << ',' << p.q.y() << ',' << p.q.z()
+      << "]];\r\n    CONST num camRunSeconds:="
+      << int(std::ceil(plan_->poses.back().t)) + 3 << ";\r\nENDMODULE\r\n";
+  return out.str();
+}
 void Session::start(unsigned id, const Settings &cfg) {
-  need(cfg.virtualConfirmed && cfg.anchorConfirmed,
+  if (cfg.workObject)
+    need(cfg.virtualConfirmed && !cfg.calibrated && !cfg.anchorConfirmed &&
+             cfg.bindIp == "127.0.0.1" && cfg.peerIp == "127.0.0.1",
+         "Taught work object requires the local virtual controller");
+  if (cfg.calibrated) {
+    need(!cfg.virtualConfirmed && !cfg.anchorConfirmed &&
+             cfg.partOrigin.allFinite() &&
+             std::abs(cfg.partRotation.norm() - 1) <= 1e-6,
+         "Calibrated mode requires a finite origin and a unit quaternion");
+  }
+  need(cfg.workObject || cfg.calibrated || (cfg.virtualConfirmed && cfg.anchorConfirmed),
        "Confirm a virtual controller and demonstration anchoring to its first "
        "feedback");
   need(cfg.port >= 1024 && cfg.port <= 65535, "UDP port must be 1024..65535");
@@ -321,6 +358,9 @@ void Session::start(unsigned id, const Settings &cfg) {
     std::lock_guard<std::mutex> lock(mutex_);
     need(!active_, "EGM session already active");
     need(plan_ && id == id_, "Prepared trajectory is stale; prepare it again");
+    need(!plan_->virtualReview || (!cfg.calibrated && cfg.virtualConfirmed &&
+             cfg.bindIp == "127.0.0.1" && cfg.peerIp == "127.0.0.1"),
+         "Virtual review requires the local RobotStudio controller on 127.0.0.1");
     plan = plan_;
   }
   if (worker_.joinable())
@@ -361,6 +401,7 @@ std::string Session::status() const {
       << ",\"bindIp\":" << quote(settings_.bindIp)
       << ",\"peerIp\":" << quote(settings_.peerIp)
       << ",\"port\":" << settings_.port;
+  out << ",\"workObject\":" << (settings_.workObject ? "true" : "false");
   if (plan_) {
     out << ",\"scope\":" << plan_->scope << ",\"poses\":" << plan_->poses.size()
         << ",\"commands\":" << plan_->commands
@@ -395,8 +436,6 @@ void Session::run(std::shared_ptr<const Plan> plan, Settings cfg) {
       message_ = "Listening; start MillingPose6510 in the virtual T_ROB1 (30 s "
                  "timeout)";
     }
-    const Q cutterToTcp(
-        0, 1, 0, 0); // One Rx(pi): planner +Z to holder, demo TCP +Z to tip.
     Q rotation = Q::Identity();
     V translation = V::Zero();
     sockaddr_in peer{};
@@ -481,11 +520,20 @@ void Session::run(std::shared_ptr<const Plan> plan, Settings cfg) {
       lastFeedback = now;
       peer = source;
       robotSeq = feedback.header.seqno;
-      if (!anchored) {
-        rotation =
-            (q * cutterToTcp.conjugate() * plan->poses.front().q.conjugate())
-                .normalized();
-        translation = p - rotation * plan->poses.front().p;
+      const bool firstFeedback = !anchored;
+      if (firstFeedback) {
+        const auto &first = plan->poses.front();
+        if (cfg.calibrated || cfg.workObject) {
+          rotation = cfg.partRotation.normalized();
+          translation = cfg.partOrigin;
+          const Q initial = (rotation * first.q).normalized();
+          need((rotation * first.p + translation - p).norm() <= .1 &&
+                   initial.angularDistance(q) <= .00872665,
+               "TCP differs from calibrated start (>0.1 mm or >0.5 deg)");
+        } else {
+          rotation = (q * first.q.conjugate()).normalized();
+          translation = p - rotation * first.p;
+        }
         start = now;
         anchored = true;
         V low = V::Constant(std::numeric_limits<double>::infinity()),
@@ -510,8 +558,9 @@ void Session::run(std::shared_ptr<const Plan> plan, Settings cfg) {
         baseLow_ = low;
         baseHigh_ = high;
         state_ = "running";
-        message_ =
-            "Streaming XYZ + quaternion to the confirmed virtual controller";
+        message_ = cfg.workObject ? "Streaming poses in taught camStock" : cfg.calibrated
+                       ? "Streaming calibrated XYZ + quaternion"
+                       : "Streaming XYZ + quaternion to the confirmed virtual controller";
       }
       double t = age(start);
       if (stop_ && !holding) {
@@ -525,7 +574,7 @@ void Session::run(std::shared_ptr<const Plan> plan, Settings cfg) {
       Pose target = holding ? hold : sample(plan->poses, t);
       if (!holding) {
         target.p = rotation * target.p + translation;
-        target.q = (rotation * target.q * cutterToTcp).normalized();
+        target.q = (rotation * target.q).normalized();
         if (t >= plan->poses.back().t) {
           if ((target.p - p).norm() <= .1 &&
               target.q.angularDistance(q) <= .00872665) {
@@ -541,6 +590,8 @@ void Session::run(std::shared_ptr<const Plan> plan, Settings cfg) {
               "Timed EGM session did not end; check runSeconds and final pose");
         }
       }
+      if ((cfg.calibrated || cfg.workObject) && firstFeedback)
+        target = {p, q, t, 0};
       auto bytes = encode(target, seq++, uint32_t(t * 1000));
       need(sendto(udp.s, reinterpret_cast<const char *>(bytes.data()),
                   int(bytes.size()), 0, reinterpret_cast<sockaddr *>(&peer),
