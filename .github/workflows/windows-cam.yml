@@ -86,6 +86,17 @@ jobs:
           python -m pip install playwright==1.55.0
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python MillingAnalyzer/tests/packaged_step_ui.py build-bezier-viewer/RobotStudio-RW6
+      - name: Package native desktop CAM and test WebView2
+        shell: pwsh
+        run: |
+          ./MillingAnalyzer/tools/package-desktop.ps1
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python MillingAnalyzer/tests/desktop_ui.py build-bezier-viewer/MillingCAM-Desktop
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MillingCAM-Desktop-Windows-x64
+          path: build-bezier-viewer/MillingCAM-Desktop/
+          if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
           name: MillingAnalyzer-RW6-EGM-Windows-x64
