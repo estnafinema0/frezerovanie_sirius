@@ -112,7 +112,7 @@ unsigned identifier(const httplib::Request &r, const char *name) {
 }
 } // namespace
 int serve(bool openBrowser, const std::filesystem::path &initialFile,
-          const std::filesystem::path &ethernetFile) {
+          const std::filesystem::path &ethernetFile, bool desktop) {
   try {
     std::string localIp, controllerIp;
     if (!ethernetFile.empty()) {
@@ -164,6 +164,10 @@ int serve(bool openBrowser, const std::filesystem::path &initialFile,
                [&](const httplib::Request &, httplib::Response &res) {
                  std::lock_guard<std::mutex> lock(mutex);
                  std::string page = viewerTemplate;
+                 if (desktop) {
+                   const std::string marker = "/*desktop-cam*/false";
+                   page.replace(page.find(marker), marker.size(), "true");
+                 }
                  if (!ethernetFile.empty()) {
                    const std::string marker = "/*ethernet-profile*/null";
                    page.replace(page.find(marker), marker.size(),
@@ -443,12 +447,14 @@ int serve(bool openBrowser, const std::filesystem::path &initialFile,
         res.set_content(errorJson(e.what()), "application/json");
       }
     };
-    server.Post(root + "/egm/prepare", egmApi);
-    server.Post(root + "/egm/start", egmApi);
-    server.Post(root + "/egm/stop", egmApi);
-    server.Get(root + "/egm/status", egmApi);
-    server.Get(root + "/egm/download", egmApi);
-    server.Get(root + "/egm/rapid-start", egmApi);
+    if (!desktop) {
+      server.Post(root + "/egm/prepare", egmApi);
+      server.Post(root + "/egm/start", egmApi);
+      server.Post(root + "/egm/stop", egmApi);
+      server.Get(root + "/egm/status", egmApi);
+      server.Get(root + "/egm/download", egmApi);
+      server.Get(root + "/egm/rapid-start", egmApi);
+    }
     std::string url = origin + root + "/";
     std::cout << "Milling Analyzer local UI: " << url
               << "\nKeep this console open. Ctrl+C stops the viewer service. "
