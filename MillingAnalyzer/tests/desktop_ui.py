@@ -42,7 +42,9 @@ with tempfile.TemporaryDirectory() as tmp, socket.socket() as probe:
             page.locator('#file').set_input_files(model)
             expect(page.locator('#modelInfo')).to_contain_text(model.name,timeout=30000)
             assert page.evaluate('hitTriangles.length>0')
-            page.locator('#solidDemo').click()
+            page.locator('#suggestStock').click()
+            page.get_by_text('Прежние способы расчёта', exact=True).click()
+            page.locator('#autoCalculate').click()
             expect(page.locator('#saveStockPath')).to_be_enabled(timeout=60000)
             page.locator('#frameMode').select_option('three')
             for field, value in [('frameO','10 20 5'),('frameX','10 30 5'),('frameY','0 20 5')]:
