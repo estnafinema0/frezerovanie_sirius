@@ -14,7 +14,8 @@ import urllib.request
 from playwright.sync_api import expect, sync_playwright
 
 package = Path(sys.argv[1]).resolve()
-with tempfile.TemporaryDirectory() as tmp, socket.socket() as probe:
+# WebView2 may briefly retain diagnostic files after the host process exits.
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, socket.socket() as probe:
     probe.bind(('127.0.0.1', 0))
     port = probe.getsockname()[1]
     probe.close()
